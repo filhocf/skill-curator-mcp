@@ -17,7 +17,8 @@ from skill_curator.tools import (
     skill_scout as _skill_scout,
 )
 
-mcp = FastMCP("skill-curator")
+_port = int(os.environ.get("SKILL_CURATOR_PORT", "3204"))
+mcp = FastMCP("skill-curator", host="127.0.0.1", port=_port)
 
 _db: Database | None = None
 _encoder = None
@@ -93,8 +94,7 @@ def skill_scout(query: str | None = None, gaps_only: bool = False) -> list[dict]
 
 def main() -> None:
     """Start the MCP server."""
-    port = int(os.environ.get("SKILL_CURATOR_PORT", "3204"))
-    mcp.run(transport="streamable-http", host="127.0.0.1", port=port)
+    mcp.run(transport="streamable-http")
 
 
 if __name__ == "__main__":
