@@ -56,8 +56,14 @@ def parse_skill_md(path: Path) -> Skill:
     )
 
 
+_EXCLUDED_FILENAMES = {
+    "README.md", "CHANGELOG.md", "MEMORY.md", "AGENTS.md",
+    "ARCHITECTURE.md", "PRD.md",
+}
+
+
 def scan_skills_dir(base_dir: Path) -> list[Path]:
-    """Find all *.md files recursively under base_dir.
+    """Find all *.md files recursively under base_dir, excluding irrelevant docs.
 
     Args:
         base_dir: Root directory to scan.
@@ -65,7 +71,9 @@ def scan_skills_dir(base_dir: Path) -> list[Path]:
     Returns:
         Sorted list of Path objects for each .md file found.
     """
-    return sorted(base_dir.rglob("*.md"))
+    return sorted(
+        p for p in base_dir.rglob("*.md") if p.name not in _EXCLUDED_FILENAMES
+    )
 
 
 def reindex_all(db: Database, skills_dir: Path, encoder: Any) -> int:
@@ -85,7 +93,8 @@ def reindex_all(db: Database, skills_dir: Path, encoder: Any) -> int:
         skill = parse_skill_md(md_file)
         embed_text = f"{skill.description or ''} {skill.trigger_text or ''}".strip()
         if encoder and embed_text:
-            encoder.encode(embed_text)
+            embedding = encoder.encode(embed_text)
+            db.save_embedding(skill.name, embedding)
         db.upsert_skill(skill)
         count += 1
         logger.debug("Indexed skill: %s", skill.name)

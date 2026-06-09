@@ -76,8 +76,8 @@ class FeedbackEntry:
     """
 
     skill_name: str
-    session_id: str
     outcome: str
+    session_id: Optional[str] = None
     task_description: Optional[str] = None
     created_at: Optional[str] = None
 

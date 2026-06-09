@@ -7,6 +7,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
+import sqlite_vec
+
 from skill_curator.models import FeedbackEntry, LifecycleState, Skill
 
 logger = logging.getLogger(__name__)
@@ -22,6 +24,9 @@ class Database:
     def __init__(self, db_path: str = ":memory:") -> None:
         self._conn = sqlite3.connect(db_path)
         self._conn.row_factory = sqlite3.Row
+        self._conn.enable_load_extension(True)
+        sqlite_vec.load(self._conn)
+        self._conn.enable_load_extension(False)
         if db_path != ":memory:":
             self._conn.execute("PRAGMA journal_mode=WAL")
         self._create_tables()
@@ -65,9 +70,11 @@ class Database:
                 discovered_at TEXT
             );
 
-            CREATE TABLE IF NOT EXISTS skill_embeddings (
+        """)
+        self._conn.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS skill_embeddings USING vec0(
                 name TEXT PRIMARY KEY,
-                embedding BLOB
+                embedding float[384]
             );
         """)
         self._conn.commit()
@@ -188,6 +195,27 @@ class Database:
             last_indexed_at=row["last_indexed_at"],
             created_at=row["created_at"],
         )
+
+    def save_embedding(self, name: str, embedding: list[float]) -> None:
+        """Save or replace an embedding for a skill."""
+        import struct
+        blob = struct.pack(f"{len(embedding)}f", *embedding)
+        self._conn.execute(
+            "INSERT OR REPLACE INTO skill_embeddings (name, embedding) VALUES (?, ?)",
+            (name, blob),
+        )
+        self._conn.commit()
+
+    def search_similar(self, query_embedding: list[float], top_k: int = 5) -> list[tuple[str, float]]:
+        """Find the top_k most similar skills by KNN distance."""
+        import struct
+        blob = struct.pack(f"{len(query_embedding)}f", *query_embedding)
+        cur = self._conn.execute(
+            """SELECT name, distance FROM skill_embeddings
+               WHERE embedding MATCH ? ORDER BY distance LIMIT ?""",
+            (blob, top_k),
+        )
+        return [(row[0], row[1]) for row in cur.fetchall()]
 
     def close(self) -> None:
         """Close the database connection."""
