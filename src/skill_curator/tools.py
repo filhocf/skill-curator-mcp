@@ -132,3 +132,42 @@ def skill_reindex(db: Database, skills_dir: Path, encoder: Any) -> dict:
 def skill_scout(query: str | None = None, gaps_only: bool = False) -> list[dict]:
     """Stub: scout not yet implemented."""
     return [{"message": "scout not yet implemented"}]
+
+
+def get_onboarding_guide() -> dict:
+    """Get integration guide for using the skill-curator MCP."""
+    return {
+        "name": "skill-curator",
+        "version": "0.1.0",
+        "purpose": "Skill lifecycle intelligence — matches tasks to skills semantically, tracks effectiveness, detects gaps.",
+        "quick_start": [
+            "1. On session start: call skill_reindex() to update the index",
+            "2. Before every task: call skill_match(task='<description>') to find relevant skills",
+            "3. If score > 0.5: read and follow the matched skill's steps",
+            "4. After task: call skill_feedback(name='<skill>', outcome='success|partial|failure')",
+            "5. On session end: call skill_gaps() to detect uncovered patterns",
+        ],
+        "tools": {
+            "skill_match": "Find best skills for a task (semantic + effectiveness ranking). Call BEFORE starting work.",
+            "skill_feedback": "Record if a skill helped. Call AFTER completing work. Adjusts future rankings.",
+            "skill_gaps": "Detect skills that should exist but don't. Call at session end.",
+            "skill_lifecycle": "Overview of skill health: active, stale, promote/archive candidates.",
+            "skill_promote": "Move a draft/stale skill to active.",
+            "skill_archive": "Deactivate a skill that no longer helps.",
+            "skill_reindex": "Rescan filesystem and regenerate embeddings. Call on startup or after adding skills.",
+            "skill_scout": "Search external sources for new skills (not yet implemented).",
+        },
+        "protocol": {
+            "startup": "skill_reindex()",
+            "before_task": "skill_match(task=..., top_k=3)",
+            "after_task": "skill_feedback(name=..., outcome=...)",
+            "shutdown": "skill_gaps()",
+        },
+        "scoring": "0.6*semantic_similarity + 0.2*effectiveness + 0.2*profile_match. Threshold: >0.5 = use it.",
+        "notes": [
+            "Skills are .md files in ~/.kiro/skills/ with optional YAML frontmatter",
+            "Effectiveness uses EMA (alpha=0.3): recent feedback weighs more",
+            "gap_count increments when a skill is suggested but not used",
+            "Skills with effectiveness < 0.3 after 5+ uses are candidates for archive",
+        ],
+    }

@@ -8,6 +8,7 @@ import pytest
 from skill_curator.db import Database
 from skill_curator.models import LifecycleState, Skill
 from skill_curator.tools import (
+    get_onboarding_guide,
     skill_archive,
     skill_feedback,
     skill_gaps,
@@ -234,3 +235,14 @@ class TestSkillMatchDifferentiation:
         # Relevant skill should score significantly higher
         assert relevant_result["score"] > irrelevant_result["score"]
         assert relevant_result["score"] > 0.3
+
+
+class TestGetOnboardingGuide:
+    """Tests for get_onboarding_guide."""
+
+    def test_get_onboarding_guide_returns_complete_info(self) -> None:
+        result = get_onboarding_guide()
+        assert "quick_start" in result
+        assert "tools" in result
+        assert "protocol" in result
+        assert len(result["tools"]) == 8

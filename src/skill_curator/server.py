@@ -7,6 +7,7 @@ from mcp.server.fastmcp import FastMCP
 
 from skill_curator.db import Database
 from skill_curator.tools import (
+    get_onboarding_guide as _get_onboarding_guide,
     skill_archive as _skill_archive,
     skill_feedback as _skill_feedback,
     skill_gaps as _skill_gaps,
@@ -18,7 +19,7 @@ from skill_curator.tools import (
 )
 
 _port = int(os.environ.get("SKILL_CURATOR_PORT", "3204"))
-mcp = FastMCP("skill-curator", host="127.0.0.1", port=_port)
+mcp = FastMCP("skill-curator", host="127.0.0.1", port=_port, instructions="Skill lifecycle intelligence MCP. Call get_onboarding_guide() for usage protocol. Key flow: skill_reindex (startup) -> skill_match (before task) -> skill_feedback (after task) -> skill_gaps (shutdown).")
 
 _db: Database | None = None
 _encoder = None
@@ -90,6 +91,12 @@ def skill_reindex() -> dict:
 def skill_scout(query: str | None = None, gaps_only: bool = False) -> list[dict]:
     """Scout for new skills from external sources (not yet implemented)."""
     return _skill_scout(query=query, gaps_only=gaps_only)
+
+
+@mcp.tool()
+def get_onboarding_guide() -> dict:
+    """Get integration guide for using the skill-curator MCP."""
+    return _get_onboarding_guide()
 
 
 def main() -> None:
