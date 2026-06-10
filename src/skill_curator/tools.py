@@ -1,173 +1,158 @@
-"""MCP tool implementations for skill-curator."""
+"""MCP tool functions for skill-curator."""
+from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from skill_curator.db import Database
 from skill_curator.indexer import reindex_all
 from skill_curator.models import FeedbackEntry, LifecycleState
-from skill_curator.scorer import composite_score
+from skill_curator.scoring import composite_score
 
-EMA_ALPHA = 0.3
-OUTCOME_VALUES = {"success": 1.0, "partial": 0.5, "failure": 0.0}
+_EMA_ALPHA = 0.3
+_OUTCOME_VALUES = {"success": 1.0, "partial": 0.5, "failure": 0.0}
+_STALE_DAYS = 30
+_ARCHIVE_DAYS = 90
 
 
-def skill_match(
-    db: Database, task: str, encoder: Any, profile: list[str] | None = None, top_k: int = 3
-) -> list[dict]:
-    """Encode task, query sqlite-vec KNN, apply composite_score, return top_k."""
-    query_embedding = encoder.encode(task)
-    if not isinstance(query_embedding, list):
-        query_embedding = query_embedding.tolist()
-    results = db.search_similar(query_embedding, top_k=top_k * 2)
+def skill_match(task: str, *, db: Database, encoder: Any, profile: list[str] | None = None, top_k: int = 3) -> list[dict]:
+    """Match skills to a task using semantic similarity + composite scoring."""
+    query_vec = encoder.encode(task)
+    results = db.search_similar(query_vec, limit=top_k * 3)
     if not results:
         return []
-    ranked = []
+
+    scored = []
     for name, distance in results:
         skill = db.get_skill(name)
-        if skill is None or skill.state != LifecycleState.ACTIVE:
+        if skill is None or skill.state == LifecycleState.ARCHIVED:
             continue
-        similarity = max(0.0, 1.0 - distance / 2.0)
-        profile_match = name in profile if profile else False
+        similarity = 1.0 - distance / 2.0
+        profile_match = profile is not None and name in profile
         score = composite_score(similarity, skill.effectiveness, profile_match)
-        ranked.append({
-            "name": skill.name,
-            "score": round(score, 4),
-            "description": skill.description,
-            "path": skill.path,
-        })
-    ranked.sort(key=lambda x: x["score"], reverse=True)
-    return ranked[:top_k]
+        scored.append({"name": name, "score": round(score, 4), "description": skill.description})
+
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    return scored[:top_k]
 
 
-def skill_feedback(
-    db: Database, name: str, outcome: str, session_id: str | None = None, task_description: str = ""
-) -> dict:
-    """Save feedback + update effectiveness via EMA (α=0.3)."""
+def skill_feedback(name: str, *, outcome: str, task_description: str = "", db: Database, session_id: str | None = None) -> dict:
+    """Record feedback and update effectiveness via EMA."""
     skill = db.get_skill(name)
     if skill is None:
-        return {"status": "error", "message": f"Skill '{name}' not found"}
-    entry = FeedbackEntry(
-        skill_name=name, outcome=outcome, session_id=session_id, task_description=task_description
-    )
-    db.add_feedback(entry)
-    outcome_value = OUTCOME_VALUES[outcome]
-    new_eff = (1 - EMA_ALPHA) * skill.effectiveness + EMA_ALPHA * outcome_value
+        return {"error": f"Skill '{name}' not found"}
+
+    outcome_value = _OUTCOME_VALUES.get(outcome, 0.0)
+    new_eff = _EMA_ALPHA * outcome_value + (1 - _EMA_ALPHA) * skill.effectiveness
     db.update_effectiveness(name, new_eff)
-    # Update usage counters
-    skill.total_uses += 1
-    if outcome == "success":
-        skill.total_successes += 1
-    skill.last_used_at = datetime.now(timezone.utc).isoformat()
-    skill.effectiveness = new_eff
-    db.upsert_skill(skill)
-    return {"status": "recorded", "new_effectiveness": round(new_eff, 4)}
+
+    # Increment total_uses
+    db.conn.execute("UPDATE skills SET total_uses = total_uses + 1, last_used_at = ? WHERE name = ?",
+                    (datetime.utcnow().isoformat(), name))
+    db.conn.commit()
+
+    entry = FeedbackEntry(skill_name=name, outcome=outcome, task_description=task_description, session_id=session_id)
+    db.add_feedback(entry)
+
+    return {"name": name, "new_effectiveness": round(new_eff, 6), "total_uses": skill.total_uses + 1}
 
 
-def skill_gaps(db: Database, session_id: str | None = None) -> list[dict]:
-    """Return active skills with gap_count > 0 or no recent use (30d)."""
-    stale = db.get_stale_skills(days=30)
-    active = db.list_skills(state="active")
+def skill_gaps(*, db: Database, session_id: str | None = None) -> list[dict]:
+    """Return skills with gap_count > 0 or no recent use."""
+    cutoff = (datetime.utcnow() - timedelta(days=_STALE_DAYS)).isoformat()
+    all_skills = db.list_skills()
     gaps = []
-    for s in active:
-        if s.gap_count > 0:
-            gaps.append({"name": s.name, "gap_count": s.gap_count, "reason": "gap_detected"})
-    for s in stale:
-        if not any(g["name"] == s.name for g in gaps):
-            gaps.append({"name": s.name, "gap_count": s.gap_count, "reason": "no_recent_use"})
+    for s in all_skills:
+        if s.state == LifecycleState.ARCHIVED:
+            continue
+        has_gap = s.gap_count > 0
+        stale_use = s.last_used_at is not None and s.last_used_at < cutoff
+        if has_gap or stale_use:
+            gaps.append({"name": s.name, "gap_count": s.gap_count, "last_used_at": s.last_used_at})
     return gaps
 
 
-def skill_lifecycle(db: Database) -> dict:
-    """Return lifecycle overview with promotion/archive candidates."""
-    active = db.list_skills(state="active")
-    stale = db.get_stale_skills(days=30)
+def skill_lifecycle(*, db: Database) -> dict:
+    """Get lifecycle status overview with promotion/archive candidates."""
     all_skills = db.list_skills()
-    candidates_promote = [
-        s.name for s in all_skills
-        if s.state != LifecycleState.ACTIVE and s.effectiveness > 0.7 and s.total_uses >= 3
-    ]
-    cutoff_90d = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
-    candidates_archive = [
-        s.name for s in all_skills
-        if s.state != LifecycleState.ARCHIVED and (
-            s.effectiveness < 0.3
-            or (s.last_used_at is not None and s.last_used_at < cutoff_90d)
-            or (s.last_used_at is None and s.state == LifecycleState.STALE)
-        )
-    ]
+    active = []
+    stale = []
+    candidates_promote = []
+    candidates_archive = []
+
+    for s in all_skills:
+        entry = {"name": s.name, "effectiveness": s.effectiveness, "state": s.state.value}
+        if s.state == LifecycleState.ACTIVE:
+            active.append(entry)
+            # Archive candidate: low effectiveness
+            if s.effectiveness < 0.3:
+                candidates_archive.append(entry)
+        elif s.state == LifecycleState.STALE:
+            stale.append(entry)
+            # Archive candidate: stale > 90 days
+            if s.last_used_at:
+                cutoff = (datetime.utcnow() - timedelta(days=_ARCHIVE_DAYS)).isoformat()
+                if s.last_used_at < cutoff:
+                    candidates_archive.append(entry)
+        elif s.state == LifecycleState.DRAFT:
+            # Promote candidate: high effectiveness + uses
+            if s.effectiveness >= 0.7 and s.total_uses >= 3:
+                candidates_promote.append(entry)
+
     return {
-        "active": len(active),
-        "stale": len(stale),
+        "active": active,
+        "stale": stale,
         "candidates_promote": candidates_promote,
         "candidates_archive": candidates_archive,
     }
 
 
-def skill_promote(db: Database, name: str) -> dict:
-    """Transition skill to ACTIVE."""
+def skill_promote(name: str, *, db: Database) -> dict:
+    """Promote a skill to active state."""
     skill = db.get_skill(name)
     if skill is None:
-        return {"status": "error", "message": f"Skill '{name}' not found"}
+        return {"error": f"Skill '{name}' not found"}
     db.transition_state(name, LifecycleState.ACTIVE)
-    return {"status": "promoted", "name": name}
+    return {"name": name, "state": "active"}
 
 
-def skill_archive(db: Database, name: str, reason: str | None = None) -> dict:
-    """Transition skill to ARCHIVED."""
+def skill_archive(name: str, *, db: Database, reason: str | None = None) -> dict:
+    """Archive a skill."""
     skill = db.get_skill(name)
     if skill is None:
-        return {"status": "error", "message": f"Skill '{name}' not found"}
+        return {"error": f"Skill '{name}' not found"}
     db.transition_state(name, LifecycleState.ARCHIVED)
-    return {"status": "archived", "name": name, "reason": reason}
+    return {"name": name, "state": "archived", "reason": reason}
 
 
-def skill_reindex(db: Database, skills_dir: Path, encoder: Any) -> dict:
-    """Call reindex_all, return count."""
-    count = reindex_all(db, skills_dir, encoder)
+def skill_reindex(*, skills_dir: str, db: Database, encoder: Any) -> dict:
+    """Reindex all skills from a directory."""
+    count = reindex_all(Path(skills_dir), db, encoder)
     return {"indexed": count}
 
 
-def skill_scout(query: str | None = None, gaps_only: bool = False) -> list[dict]:
-    """Stub: scout not yet implemented."""
-    return [{"message": "scout not yet implemented"}]
+def skill_scout(*, db: Database | None = None, query: str | None = None, gaps_only: bool = False) -> dict:
+    """Scout for external skills (stub)."""
+    return {"message": "Scout not yet implemented (stub)", "query": query, "gaps_only": gaps_only}
 
 
 def get_onboarding_guide() -> dict:
-    """Get integration guide for using the skill-curator MCP."""
+    """Return onboarding guide for MCP clients."""
     return {
-        "name": "skill-curator",
-        "version": "0.1.0",
-        "purpose": "Skill lifecycle intelligence — matches tasks to skills semantically, tracks effectiveness, detects gaps.",
-        "quick_start": [
-            "1. On session start: call skill_reindex() to update the index",
-            "2. Before every task: call skill_match(task='<description>') to find relevant skills",
-            "3. If score > 0.5: read and follow the matched skill's steps",
-            "4. After task: call skill_feedback(name='<skill>', outcome='success|partial|failure')",
-            "5. On session end: call skill_gaps() to detect uncovered patterns",
+        "quick_start": "Call skill_match before each task to get relevant skills.",
+        "tools": [
+            {"name": "skill_match", "description": "Semantic skill matching for a task"},
+            {"name": "skill_feedback", "description": "Record outcome feedback for a skill"},
+            {"name": "skill_gaps", "description": "Detect skill gaps and stale skills"},
+            {"name": "skill_lifecycle", "description": "Get lifecycle status overview"},
+            {"name": "skill_promote", "description": "Promote a skill to active"},
+            {"name": "skill_archive", "description": "Archive a skill"},
+            {"name": "skill_reindex", "description": "Reindex skills from filesystem"},
+            {"name": "skill_scout", "description": "Scout for external skills"},
+            {"name": "get_onboarding_guide", "description": "This guide"},
         ],
-        "tools": {
-            "skill_match": "Find best skills for a task (semantic + effectiveness ranking). Call BEFORE starting work.",
-            "skill_feedback": "Record if a skill helped. Call AFTER completing work. Adjusts future rankings.",
-            "skill_gaps": "Detect skills that should exist but don't. Call at session end.",
-            "skill_lifecycle": "Overview of skill health: active, stale, promote/archive candidates.",
-            "skill_promote": "Move a draft/stale skill to active.",
-            "skill_archive": "Deactivate a skill that no longer helps.",
-            "skill_reindex": "Rescan filesystem and regenerate embeddings. Call on startup or after adding skills.",
-            "skill_scout": "Search external sources for new skills (not yet implemented).",
-        },
-        "protocol": {
-            "startup": "skill_reindex()",
-            "before_task": "skill_match(task=..., top_k=3)",
-            "after_task": "skill_feedback(name=..., outcome=...)",
-            "shutdown": "skill_gaps()",
-        },
-        "scoring": "0.6*semantic_similarity + 0.2*effectiveness + 0.2*profile_match. Threshold: >0.5 = use it.",
-        "notes": [
-            "Skills are .md files in ~/.kiro/skills/ with optional YAML frontmatter",
-            "Effectiveness uses EMA (alpha=0.3): recent feedback weighs more",
-            "gap_count increments when a skill is suggested but not used",
-            "Skills with effectiveness < 0.3 after 5+ uses are candidates for archive",
-        ],
+        "protocol": "StreamableHTTP on localhost",
+        "scoring": "0.6*similarity + 0.2*effectiveness + 0.2*profile_match; EMA α=0.3",
+        "notes": "Use skill_reindex at session start, skill_gaps at shutdown.",
     }

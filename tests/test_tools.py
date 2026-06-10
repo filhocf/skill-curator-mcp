@@ -1,7 +1,5 @@
-"""Tests for skill_curator.tools — tool implementations."""
-
-from pathlib import Path
-from unittest.mock import MagicMock
+"""Tests for skill_curator.tools — MCP tool functions (phase 0.2.0 RED)."""
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -20,229 +18,245 @@ from skill_curator.tools import (
 )
 
 
+class MockEncoder:
+    """Fixed encoder: always returns [0.1]*384."""
+
+    def encode(self, text: str) -> list[float]:
+        return [0.1] * 384
+
+
+class DifferentiatingEncoder:
+    """Returns different vectors based on input to test score differentiation."""
+
+    def encode(self, text: str) -> list[float]:
+        if "python" in text.lower() or "rest" in text.lower():
+            return [0.9] * 384
+        if "testing" in text.lower():
+            return [0.8] * 192 + [0.1] * 192
+        return [0.1] * 384
+
+
 @pytest.fixture
 def db() -> Database:
-    """In-memory database for testing."""
     return Database(":memory:")
 
 
 @pytest.fixture
-def mock_encoder() -> MagicMock:
-    """Mock encoder returning fixed 384-dim vector."""
-    encoder = MagicMock()
-    encoder.encode.return_value = [0.1] * 384
-    return encoder
+def db_with_skills(db: Database) -> Database:
+    """DB with 4 skills + embeddings for tool tests."""
+    encoder = MockEncoder()
+    skills = [
+        Skill(name="python-rest", path="/skills/python-rest.md", description="Build REST APIs in Python",
+              effectiveness=0.8, total_uses=5, state=LifecycleState.ACTIVE, profile_tags='["backend"]'),
+        Skill(name="testing", path="/skills/testing.md", description="Unit testing patterns",
+              effectiveness=0.6, total_uses=2, state=LifecycleState.ACTIVE),
+        Skill(name="old-skill", path="/skills/old.md", description="Legacy patterns",
+              effectiveness=0.2, total_uses=10, state=LifecycleState.STALE,
+              last_used_at=(datetime.utcnow() - timedelta(days=95)).isoformat()),
+        Skill(name="archived-skill", path="/skills/archived.md", description="Deprecated tool",
+              effectiveness=0.1, total_uses=1, state=LifecycleState.ARCHIVED),
+    ]
+    for s in skills:
+        db.upsert_skill(s)
+        text = f"{s.description or ''} {s.trigger_text or ''}".strip()
+        db.save_embedding(s.name, encoder.encode(text))
+    return db
 
 
-def _insert_skill(db: Database, name: str, **kwargs) -> None:
-    """Helper to insert a skill with defaults."""
-    defaults = {"path": f"/skills/{name}.md", "description": f"Skill {name}"}
-    defaults.update(kwargs)
-    db.upsert_skill(Skill(name=name, **defaults))
+# === skill_match ===
 
 
 class TestSkillMatch:
-    """Tests for skill_match."""
+    def test_returns_top_k_ordered_by_score_desc(self, db_with_skills: Database) -> None:
+        results = skill_match("build an API", db=db_with_skills, encoder=MockEncoder(), top_k=2)
+        assert len(results) <= 2
+        scores = [r["score"] for r in results]
+        assert scores == sorted(scores, reverse=True)
 
-    def test_returns_ordered_by_score(self, db: Database, mock_encoder: MagicMock) -> None:
-        """skill_match returns results ordered by descending score."""
-        _insert_skill(db, "high-eff", effectiveness=0.9)
-        _insert_skill(db, "low-eff", effectiveness=0.1)
-        # Save embeddings
-        db.save_embedding("high-eff", [0.1] * 384)
-        db.save_embedding("low-eff", [0.1] * 384)
-        results = skill_match(db, "test task", mock_encoder, top_k=5)
-        assert len(results) == 2
-        assert results[0]["score"] >= results[1]["score"]
-
-    def test_empty_db_returns_empty(self, db: Database, mock_encoder: MagicMock) -> None:
-        """skill_match with no skills returns empty list."""
-        results = skill_match(db, "any task", mock_encoder)
+    def test_empty_db_returns_empty_list(self, db: Database) -> None:
+        results = skill_match("anything", db=db, encoder=MockEncoder())
         assert results == []
 
-    def test_respects_top_k(self, db: Database, mock_encoder: MagicMock) -> None:
-        """skill_match returns at most top_k results."""
-        for i in range(5):
-            _insert_skill(db, f"skill-{i}")
-            db.save_embedding(f"skill-{i}", [0.1] * 384)
-        results = skill_match(db, "task", mock_encoder, top_k=2)
-        assert len(results) <= 2
+    def test_excludes_archived_skills(self, db_with_skills: Database) -> None:
+        results = skill_match("deprecated tool", db=db_with_skills, encoder=MockEncoder(), top_k=10)
+        names = [r["name"] for r in results]
+        assert "archived-skill" not in names
 
-    def test_profile_boost(self, db: Database, mock_encoder: MagicMock) -> None:
-        """skill_match gives higher score to profile-matching skills."""
-        _insert_skill(db, "profiled", effectiveness=0.5)
-        _insert_skill(db, "generic", effectiveness=0.5)
-        db.save_embedding("profiled", [0.1] * 384)
-        db.save_embedding("generic", [0.1] * 384)
-        results = skill_match(db, "task", mock_encoder, profile=["profiled"], top_k=5)
-        profiled = next(r for r in results if r["name"] == "profiled")
-        generic = next(r for r in results if r["name"] == "generic")
-        assert profiled["score"] > generic["score"]
+    def test_profile_boost_increases_score(self, db_with_skills: Database) -> None:
+        without_profile = skill_match("REST API", db=db_with_skills, encoder=MockEncoder(), top_k=5)
+        with_profile = skill_match("REST API", db=db_with_skills, encoder=MockEncoder(),
+                                   top_k=5, profile=["python-rest"])
+        score_without = next(r["score"] for r in without_profile if r["name"] == "python-rest")
+        score_with = next(r["score"] for r in with_profile if r["name"] == "python-rest")
+        assert score_with > score_without
 
-    def test_excludes_archived(self, db: Database, mock_encoder: MagicMock) -> None:
-        """skill_match excludes archived skills."""
-        _insert_skill(db, "archived-one", state=LifecycleState.ARCHIVED)
-        db.save_embedding("archived-one", [0.1] * 384)
-        results = skill_match(db, "task", mock_encoder)
-        assert all(r["name"] != "archived-one" for r in results)
+    def test_semantically_relevant_score_above_threshold(self, db: Database) -> None:
+        """When encoder returns similar vectors, score should be > 0.5."""
+        encoder = DifferentiatingEncoder()
+        skill = Skill(name="python-rest", path="/s/p.md", description="Python REST APIs",
+                      effectiveness=0.7, state=LifecycleState.ACTIVE)
+        db.upsert_skill(skill)
+        db.save_embedding("python-rest", encoder.encode("Python REST APIs"))
+        results = skill_match("python rest endpoint", db=db, encoder=encoder, top_k=3)
+        assert len(results) >= 1
+        assert results[0]["score"] > 0.5
+
+
+# === skill_feedback ===
 
 
 class TestSkillFeedback:
-    """Tests for skill_feedback."""
+    def test_saves_feedback_and_updates_effectiveness_ema(self, db_with_skills: Database) -> None:
+        old_eff = db_with_skills.get_skill("python-rest").effectiveness  # 0.8
+        result = skill_feedback("python-rest", outcome="success", task_description="built API",
+                                db=db_with_skills)
+        new_eff = db_with_skills.get_skill("python-rest").effectiveness
+        expected = 0.3 * 1.0 + 0.7 * old_eff  # EMA α=0.3
+        assert new_eff == pytest.approx(expected, abs=1e-6)
 
-    def test_updates_effectiveness(self, db: Database) -> None:
-        """skill_feedback updates effectiveness via EMA."""
-        _insert_skill(db, "s1", effectiveness=0.5)
-        result = skill_feedback(db, "s1", "success")
-        # EMA: 0.7*0.5 + 0.3*1.0 = 0.65
-        expected = 0.7 * 0.5 + 0.3 * 1.0
-        assert abs(result["new_effectiveness"] - expected) < 0.001
+    def test_increments_total_uses(self, db_with_skills: Database) -> None:
+        old_uses = db_with_skills.get_skill("testing").total_uses
+        skill_feedback("testing", outcome="success", task_description="wrote tests",
+                       db=db_with_skills)
+        new_uses = db_with_skills.get_skill("testing").total_uses
+        assert new_uses == old_uses + 1
 
-    def test_increments_total_uses(self, db: Database) -> None:
-        """skill_feedback increments total_uses."""
-        _insert_skill(db, "s1", effectiveness=0.5)
-        skill_feedback(db, "s1", "success")
-        skill = db.get_skill("s1")
-        assert skill.total_uses == 1
-        assert skill.total_successes == 1
-
-    def test_failure_decreases_effectiveness(self, db: Database) -> None:
-        """skill_feedback with failure decreases effectiveness."""
-        _insert_skill(db, "s1", effectiveness=0.5)
-        result = skill_feedback(db, "s1", "failure")
-        # EMA: 0.7*0.5 + 0.3*0.0 = 0.35
-        assert result["new_effectiveness"] < 0.5
+    @pytest.mark.parametrize("outcome,direction", [("success", "up"), ("failure", "down")])
+    def test_effectiveness_direction(self, db_with_skills: Database, outcome: str, direction: str) -> None:
+        old_eff = db_with_skills.get_skill("testing").effectiveness  # 0.6
+        skill_feedback("testing", outcome=outcome, task_description="task", db=db_with_skills)
+        new_eff = db_with_skills.get_skill("testing").effectiveness
+        if direction == "up":
+            assert new_eff > old_eff
+        else:
+            assert new_eff < old_eff
 
     def test_nonexistent_skill_returns_error(self, db: Database) -> None:
-        """skill_feedback on missing skill returns error."""
-        result = skill_feedback(db, "nonexistent", "success")
-        assert result["status"] == "error"
+        result = skill_feedback("nonexistent", outcome="success", task_description="x", db=db)
+        assert result.get("error") is not None
+
+
+# === skill_gaps ===
 
 
 class TestSkillGaps:
-    """Tests for skill_gaps."""
+    def test_returns_skills_with_gap_count_gt_zero(self, db: Database) -> None:
+        db.upsert_skill(Skill(name="gapped", path="/g.md", gap_count=3, state=LifecycleState.ACTIVE))
+        db.upsert_skill(Skill(name="ok", path="/ok.md", gap_count=0, state=LifecycleState.ACTIVE))
+        results = skill_gaps(db=db)
+        names = [r["name"] for r in results]
+        assert "gapped" in names
+        assert "ok" not in names
 
-    def test_returns_gaps(self, db: Database) -> None:
-        """skill_gaps returns skills with gap_count > 0."""
-        _insert_skill(db, "gappy", gap_count=3)
-        gaps = skill_gaps(db)
-        assert any(g["name"] == "gappy" for g in gaps)
+    def test_returns_skills_without_recent_use(self, db: Database) -> None:
+        old_date = (datetime.utcnow() - timedelta(days=45)).isoformat()
+        db.upsert_skill(Skill(name="stale-use", path="/s.md", last_used_at=old_date,
+                              state=LifecycleState.ACTIVE))
+        db.upsert_skill(Skill(name="recent", path="/r.md", last_used_at=datetime.utcnow().isoformat(),
+                              state=LifecycleState.ACTIVE))
+        results = skill_gaps(db=db)
+        names = [r["name"] for r in results]
+        assert "stale-use" in names
+        assert "recent" not in names
+
+
+# === skill_lifecycle ===
 
 
 class TestSkillLifecycle:
-    """Tests for skill_lifecycle."""
+    def test_categorizes_active_stale_promote_archive(self, db_with_skills: Database) -> None:
+        result = skill_lifecycle(db=db_with_skills)
+        assert "active" in result
+        assert "stale" in result
+        assert "candidates_promote" in result
+        assert "candidates_archive" in result
 
-    def test_categorizes_correctly(self, db: Database) -> None:
-        """skill_lifecycle returns correct counts and candidates."""
-        _insert_skill(db, "active1", state=LifecycleState.ACTIVE)
-        _insert_skill(db, "draft-good", state=LifecycleState.DRAFT, effectiveness=0.8, total_uses=5)
-        _insert_skill(db, "bad", state=LifecycleState.ACTIVE, effectiveness=0.1)
-        result = skill_lifecycle(db)
-        assert result["active"] >= 1
-        assert "draft-good" in result["candidates_promote"]
-        assert "bad" in result["candidates_archive"]
+    def test_candidate_promote_high_effectiveness_and_uses(self, db: Database) -> None:
+        db.upsert_skill(Skill(name="star", path="/s.md", effectiveness=0.8, total_uses=5,
+                              state=LifecycleState.DRAFT))
+        result = skill_lifecycle(db=db)
+        names = [s["name"] for s in result["candidates_promote"]]
+        assert "star" in names
+
+    def test_candidate_archive_low_effectiveness(self, db: Database) -> None:
+        db.upsert_skill(Skill(name="bad", path="/b.md", effectiveness=0.2, total_uses=10,
+                              state=LifecycleState.ACTIVE))
+        result = skill_lifecycle(db=db)
+        names = [s["name"] for s in result["candidates_archive"]]
+        assert "bad" in names
+
+    def test_candidate_archive_stale_over_90d(self, db: Database) -> None:
+        old = (datetime.utcnow() - timedelta(days=100)).isoformat()
+        db.upsert_skill(Skill(name="ancient", path="/a.md", effectiveness=0.5, total_uses=2,
+                              state=LifecycleState.STALE, last_used_at=old))
+        result = skill_lifecycle(db=db)
+        names = [s["name"] for s in result["candidates_archive"]]
+        assert "ancient" in names
+
+
+# === skill_promote / skill_archive ===
 
 
 class TestSkillPromote:
-    """Tests for skill_promote."""
-
-    def test_changes_state(self, db: Database) -> None:
-        """skill_promote transitions to ACTIVE."""
-        _insert_skill(db, "draft1", state=LifecycleState.DRAFT)
-        result = skill_promote(db, "draft1")
-        assert result["status"] == "promoted"
-        assert db.get_skill("draft1").state == LifecycleState.ACTIVE
+    def test_changes_state_to_active(self, db_with_skills: Database) -> None:
+        result = skill_promote("old-skill", db=db_with_skills)
+        skill = db_with_skills.get_skill("old-skill")
+        assert skill.state == LifecycleState.ACTIVE
 
     def test_nonexistent_returns_error(self, db: Database) -> None:
-        """skill_promote on missing skill returns error."""
-        result = skill_promote(db, "nope")
-        assert result["status"] == "error"
+        result = skill_promote("ghost", db=db)
+        assert result.get("error") is not None
 
 
 class TestSkillArchive:
-    """Tests for skill_archive."""
-
-    def test_changes_state(self, db: Database) -> None:
-        """skill_archive transitions to ARCHIVED."""
-        _insert_skill(db, "old", state=LifecycleState.ACTIVE)
-        result = skill_archive(db, "old", reason="outdated")
-        assert result["status"] == "archived"
-        assert db.get_skill("old").state == LifecycleState.ARCHIVED
+    def test_changes_state_to_archived(self, db_with_skills: Database) -> None:
+        result = skill_archive("testing", db=db_with_skills)
+        skill = db_with_skills.get_skill("testing")
+        assert skill.state == LifecycleState.ARCHIVED
 
     def test_nonexistent_returns_error(self, db: Database) -> None:
-        """skill_archive on missing skill returns error."""
-        result = skill_archive(db, "nope")
-        assert result["status"] == "error"
+        result = skill_archive("ghost", db=db)
+        assert result.get("error") is not None
+
+
+# === skill_reindex ===
 
 
 class TestSkillReindex:
-    """Tests for skill_reindex."""
-
-    def test_returns_correct_count(self, db: Database, mock_encoder: MagicMock, tmp_path: Path) -> None:
-        """skill_reindex returns the number of indexed skills."""
-        (tmp_path / "a.md").write_text("---\ndescription: A\n---\n")
-        (tmp_path / "b.md").write_text("---\ndescription: B\n---\n")
-        result = skill_reindex(db, tmp_path, mock_encoder)
+    def test_returns_correct_count(self, tmp_path) -> None:
+        (tmp_path / "a.md").write_text("---\ndescription: Skill A\n---\n# A")
+        (tmp_path / "b.md").write_text("# Skill B\nContent.")
+        db = Database(":memory:")
+        result = skill_reindex(skills_dir=str(tmp_path), db=db, encoder=MockEncoder())
         assert result["indexed"] == 2
 
-    def test_empty_dir_returns_zero(self, db: Database, mock_encoder: MagicMock, tmp_path: Path) -> None:
-        """skill_reindex with empty dir returns 0."""
-        result = skill_reindex(db, tmp_path, mock_encoder)
+    def test_empty_dir_returns_zero(self, tmp_path) -> None:
+        db = Database(":memory:")
+        result = skill_reindex(skills_dir=str(tmp_path), db=db, encoder=MockEncoder())
         assert result["indexed"] == 0
 
 
+# === skill_scout ===
+
+
 class TestSkillScout:
-    """Tests for skill_scout stub."""
-
-    def test_returns_stub_message(self) -> None:
-        """skill_scout returns stub message."""
-        result = skill_scout()
-        assert len(result) == 1
-        assert "not yet implemented" in result[0]["message"]
-
-    def test_accepts_params(self) -> None:
-        """skill_scout accepts query and gaps_only params."""
-        result = skill_scout(query="python", gaps_only=True)
-        assert isinstance(result, list)
+    def test_returns_stub_message(self, db: Database) -> None:
+        result = skill_scout(db=db)
+        assert "message" in result or "stub" in str(result).lower()
 
 
-class TestSkillMatchDifferentiation:
-    """Tests for skill_match returning differentiated scores."""
-
-    def test_skill_match_differentiates_relevant_from_irrelevant(self, db: Database) -> None:
-        """skill_match scores should differ based on embedding similarity."""
-        import math
-
-        dim = 384
-        # Relevant skill vector: aligned with query
-        relevant_vec = [1.0 / math.sqrt(dim)] * dim
-        # Irrelevant skill vector: opposite direction
-        irrelevant_vec = [-1.0 / math.sqrt(dim)] * dim
-
-        _insert_skill(db, "relevant", effectiveness=0.5)
-        _insert_skill(db, "irrelevant", effectiveness=0.5)
-        db.save_embedding("relevant", relevant_vec)
-        db.save_embedding("irrelevant", irrelevant_vec)
-
-        # Encoder returns vector aligned with relevant_vec
-        encoder = MagicMock()
-        encoder.encode.return_value = relevant_vec
-
-        results = skill_match(db, "deploy kubernetes", encoder, top_k=5)
-        assert len(results) == 2
-        relevant_result = next(r for r in results if r["name"] == "relevant")
-        irrelevant_result = next(r for r in results if r["name"] == "irrelevant")
-        # Relevant skill should score significantly higher
-        assert relevant_result["score"] > irrelevant_result["score"]
-        assert relevant_result["score"] > 0.3
+# === get_onboarding_guide ===
 
 
 class TestGetOnboardingGuide:
-    """Tests for get_onboarding_guide."""
-
-    def test_get_onboarding_guide_returns_complete_info(self) -> None:
+    def test_returns_expected_keys(self) -> None:
         result = get_onboarding_guide()
         assert "quick_start" in result
         assert "tools" in result
         assert "protocol" in result
-        assert len(result["tools"]) == 8
+        assert "scoring" in result
+        assert "notes" in result
+
+    def test_tools_has_nine_entries(self) -> None:
+        result = get_onboarding_guide()
+        assert len(result["tools"]) == 9

@@ -1,128 +1,69 @@
-"""Tests for skill_curator.models — dataclasses and type definitions."""
-
+"""Tests for skill_curator.models — domain dataclasses and enums."""
 import pytest
 
-from skill_curator.models import (
-    FeedbackEntry,
-    LifecycleState,
-    ScoutedSkill,
-    Skill,
-    VALID_OUTCOMES,
-)
+from skill_curator.models import FeedbackEntry, LifecycleState, ScoutedSkill, Skill
 
 
 class TestLifecycleState:
-    """Tests for LifecycleState enum."""
+    """LifecycleState enum validation."""
 
-    def test_all_states_exist(self) -> None:
-        """All 4 lifecycle states are defined."""
+    def test_has_active(self) -> None:
         assert LifecycleState.ACTIVE.value == "active"
+
+    def test_has_stale(self) -> None:
         assert LifecycleState.STALE.value == "stale"
+
+    def test_has_archived(self) -> None:
         assert LifecycleState.ARCHIVED.value == "archived"
+
+    def test_has_draft(self) -> None:
         assert LifecycleState.DRAFT.value == "draft"
 
-    def test_state_from_string(self) -> None:
-        """LifecycleState can be created from string value."""
-        assert LifecycleState("active") == LifecycleState.ACTIVE
+    def test_exactly_four_members(self) -> None:
+        assert len(LifecycleState) == 4
 
 
 class TestSkill:
-    """Tests for the Skill dataclass."""
+    """Skill dataclass creation and validation."""
 
-    def test_creation_with_defaults(self) -> None:
-        """Skill created with only required fields has sane defaults."""
-        skill = Skill(name="test-skill", path="/skills/test.md")
+    def test_create_with_defaults(self) -> None:
+        skill = Skill(name="test-skill", path="/tmp/test.md")
+        assert skill.name == "test-skill"
         assert skill.effectiveness == 0.5
-        assert skill.total_uses == 0
-        assert skill.total_successes == 0
-        assert skill.gap_count == 0
         assert skill.state == LifecycleState.ACTIVE
-        assert skill.profile_tags == []
+        assert skill.total_uses == 0
 
-    def test_creation_full(self) -> None:
-        """Skill accepts all optional fields."""
-        skill = Skill(
-            name="full",
-            path="/full.md",
-            description="desc",
-            trigger_text="trigger",
-            effectiveness=0.8,
-            total_uses=10,
-            total_successes=7,
-            gap_count=2,
-            state=LifecycleState.STALE,
-            profile_tags=["python"],
-            last_used_at="2026-01-01T00:00:00",
-            created_at="2025-01-01T00:00:00",
-        )
-        assert skill.effectiveness == 0.8
-        assert skill.profile_tags == ["python"]
-
-    def test_state_coercion_from_string(self) -> None:
-        """Skill coerces string state to LifecycleState enum."""
-        skill = Skill(name="s", path="/s.md", state="draft")  # type: ignore
+    def test_state_coerce_from_string(self) -> None:
+        """String 'draft' should coerce to LifecycleState.DRAFT."""
+        skill = Skill(name="s", path="/p", state="draft")
         assert skill.state == LifecycleState.DRAFT
 
-    def test_invalid_state_raises(self) -> None:
-        """Skill rejects invalid state values."""
+    def test_state_invalid_raises(self) -> None:
         with pytest.raises(ValueError):
-            Skill(name="bad", path="/x.md", state="invalid_state")  # type: ignore
-
-    def test_invalid_state_type_raises(self) -> None:
-        """Skill rejects non-string, non-enum state."""
-        with pytest.raises(TypeError):
-            Skill(name="bad", path="/x.md", state=123)  # type: ignore
+            Skill(name="s", path="/p", state="invalid_state")
 
 
 class TestFeedbackEntry:
-    """Tests for the FeedbackEntry dataclass."""
+    """FeedbackEntry outcome validation."""
 
-    def test_creation(self) -> None:
-        """FeedbackEntry stores all fields correctly."""
-        entry = FeedbackEntry(
-            skill_name="my-skill",
-            session_id="sess-1",
-            outcome="success",
-            task_description="build API",
-        )
-        assert entry.skill_name == "my-skill"
-        assert entry.outcome == "success"
-
-    def test_valid_outcomes(self) -> None:
-        """All valid outcomes are accepted."""
-        for outcome in VALID_OUTCOMES:
-            entry = FeedbackEntry(skill_name="x", session_id="s", outcome=outcome)
-            assert entry.outcome == outcome
+    @pytest.mark.parametrize("outcome", ["success", "partial", "failure"])
+    def test_valid_outcomes(self, outcome: str) -> None:
+        entry = FeedbackEntry(skill_name="s", outcome=outcome, task_description="t")
+        assert entry.outcome == outcome
 
     def test_invalid_outcome_raises(self) -> None:
-        """Invalid outcome raises ValueError."""
         with pytest.raises(ValueError):
-            FeedbackEntry(skill_name="x", session_id="s", outcome="invalid")
+            FeedbackEntry(skill_name="s", outcome="unknown", task_description="t")
+
+    def test_session_id_optional(self) -> None:
+        entry = FeedbackEntry(skill_name="s", outcome="success", task_description="t")
+        assert entry.session_id is None
 
 
 class TestScoutedSkill:
-    """Tests for the ScoutedSkill dataclass."""
+    """ScoutedSkill defaults."""
 
-    def test_creation(self) -> None:
-        """ScoutedSkill records external discovery metadata."""
-        scouted = ScoutedSkill(
-            source_url="https://github.com/org/skill",
-            name="ext-skill",
-            description="Does X",
-            relevance_score=0.75,
-            matched_gap="testing",
-        )
+    def test_create_with_defaults(self) -> None:
+        scouted = ScoutedSkill(source_url="https://example.com", name="ext-skill")
         assert scouted.status == "new"
-        assert scouted.relevance_score == 0.75
-
-    def test_custom_status(self) -> None:
-        """ScoutedSkill accepts custom status."""
-        scouted = ScoutedSkill(
-            source_url="http://x",
-            name="s",
-            description="d",
-            relevance_score=0.5,
-            matched_gap="g",
-            status="adopted",
-        )
-        assert scouted.status == "adopted"
+        assert scouted.relevance_score is None

@@ -1,107 +1,89 @@
-"""Filesystem scan and embedding generation for skills."""
+"""Filesystem scanning, markdown parsing, and embedding generation."""
+from __future__ import annotations
 
-import logging
 from pathlib import Path
-from typing import Any, Callable, Optional, Protocol
+from typing import Any
 
 import yaml
 
 from skill_curator.db import Database
 from skill_curator.models import Skill
 
-logger = logging.getLogger(__name__)
+_EXCLUDED = {"README.md", "CHANGELOG.md", "MEMORY.md", "AGENTS.md", "ARCHITECTURE.md", "PRD.md"}
 
 
-def parse_skill_md(path: Path) -> Skill:
-    """Parse a skill markdown file extracting frontmatter metadata.
+def parse_skill_md(path: Path) -> dict[str, Any]:
+    """Parse a skill markdown file extracting frontmatter or first-line fallback.
 
     Args:
-        path: Path to the .md file.
+        path: Path to a .md file.
 
     Returns:
-        Skill dataclass with extracted fields.
+        Dict with at least 'description' key.
 
     Raises:
         FileNotFoundError: If path does not exist.
     """
     if not path.exists():
-        raise FileNotFoundError(f"Skill file not found: {path}")
-
+        raise FileNotFoundError(f"File not found: {path}")
     content = path.read_text(encoding="utf-8")
-    name = path.stem
-    description: Optional[str] = None
-    trigger_text: Optional[str] = None
+    result: dict[str, Any] = {"name": path.stem, "path": str(path)}
 
-    # Parse YAML frontmatter (between --- delimiters)
     if content.startswith("---"):
         parts = content.split("---", 2)
         if len(parts) >= 3:
-            try:
-                meta = yaml.safe_load(parts[1])
-                if isinstance(meta, dict):
-                    description = meta.get("description")
-                    trigger_text = meta.get("trigger")
-            except yaml.YAMLError:
-                pass
-            # Use body after frontmatter as description fallback
-            body = parts[2].strip()
-            if not description and body:
-                description = body.split("\n")[0].lstrip("# ").strip()
+            meta = yaml.safe_load(parts[1])
+            if isinstance(meta, dict):
+                result.update(meta)
+                return result
 
-    return Skill(
-        name=name,
-        path=str(path),
-        description=description,
-        trigger_text=trigger_text,
-    )
-
-
-_EXCLUDED_FILENAMES = {
-    "README.md", "CHANGELOG.md", "MEMORY.md", "AGENTS.md",
-    "ARCHITECTURE.md", "PRD.md",
-}
+    # Fallback: first line as description
+    for line in content.splitlines():
+        stripped = line.strip().lstrip("#").strip()
+        if stripped:
+            result["description"] = stripped
+            break
+    return result
 
 
 def scan_skills_dir(base_dir: Path) -> list[Path]:
-    """Find all *.md files recursively under base_dir, excluding irrelevant docs.
+    """Recursively find .md skill files, excluding special files.
 
     Args:
         base_dir: Root directory to scan.
 
     Returns:
-        Sorted list of Path objects for each .md file found.
+        List of Paths to valid skill markdown files.
     """
-    return sorted(
-        p for p in base_dir.rglob("*.md") if p.name not in _EXCLUDED_FILENAMES
-    )
+    if not base_dir.exists():
+        return []
+    return [p for p in sorted(base_dir.rglob("*.md")) if p.name not in _EXCLUDED]
 
 
-def reindex_all(db: Database, skills_dir: Path, encoder: Any) -> int:
-    """Scan directory, parse skills, encode embeddings, and upsert into DB.
+def reindex_all(skills_dir: Path, db: Database, encoder: Any) -> int:
+    """Scan, parse, encode, and upsert all skills.
 
     Args:
+        skills_dir: Root skills directory.
         db: Database instance.
-        skills_dir: Directory containing skill .md files.
-        encoder: Object with an `encode(text: str) -> list[float]` method.
+        encoder: Object with .encode(text) -> list[float].
 
     Returns:
         Number of skills indexed.
     """
     paths = scan_skills_dir(skills_dir)
     count = 0
-    for md_file in paths:
-        skill = parse_skill_md(md_file)
-        embed_text = f"{skill.description or ''} {skill.trigger_text or ''}".strip()
-        if not embed_text:
-            # Fallback: use filename + first line of body
-            content = md_file.read_text(encoding="utf-8")
-            body = content.split("---", 2)[-1].strip() if "---" in content else content.strip()
-            first_line = body.split("\n")[0].lstrip("# ").strip() if body else ""
-            embed_text = f"{md_file.stem} {first_line}".strip()
-        if encoder and embed_text:
-            embedding = encoder.encode(embed_text)
-            db.save_embedding(skill.name, embedding)
+    for path in paths:
+        meta = parse_skill_md(path)
+        skill = Skill(
+            name=meta.get("name", path.stem),
+            path=str(path),
+            description=meta.get("description"),
+            trigger_text=meta.get("trigger"),
+        )
+        text = f"{skill.description or ''} {skill.trigger_text or ''}".strip()
+        embedding = encoder.encode(text)
         db.upsert_skill(skill)
+        db.save_embedding(skill.name, embedding)
         count += 1
-        logger.debug("Indexed skill: %s", skill.name)
     return count

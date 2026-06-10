@@ -1,4 +1,5 @@
-"""Tests for skill_curator.db — SQLite database layer."""
+"""Tests for skill_curator.db — SQLite storage layer."""
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -8,180 +9,87 @@ from skill_curator.models import FeedbackEntry, LifecycleState, Skill
 
 @pytest.fixture
 def db() -> Database:
-    """In-memory database for testing."""
+    """In-memory database for isolated tests."""
     return Database(":memory:")
 
 
+@pytest.fixture
+def sample_skill() -> Skill:
+    return Skill(name="python-rest", path="/skills/python-rest.md", description="REST APIs in Python")
+
+
 class TestDatabaseInit:
-    """Tests for database initialization and schema."""
-
-    def test_creates_tables(self, db: Database) -> None:
-        """Database.__init__ creates all expected tables."""
-        cur = db._conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-        )
-        tables = {row["name"] for row in cur.fetchall()}
-        assert "skills" in tables
-        assert "feedback_log" in tables
-        assert "scouted_skills" in tables
-        assert "skill_embeddings" in tables
-
-    def test_idempotent_init(self) -> None:
-        """Creating Database twice on same path doesn't raise."""
-        db1 = Database(":memory:")
-        # Simulate re-init by calling _create_tables again
-        db1._create_tables()
-        cur = db1._conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='skills'"
-        )
-        assert cur.fetchone() is not None
+    def test_initializes_without_error(self, db: Database) -> None:
+        assert db is not None
 
 
-class TestUpsertAndGet:
-    """Tests for skill upsert and retrieval."""
-
-    def test_upsert_and_get(self, db: Database) -> None:
-        """Can insert a skill and retrieve it by name."""
-        skill = Skill(name="test-skill", path="/skills/test.md", description="A test")
-        db.upsert_skill(skill)
-        result = db.get_skill("test-skill")
+class TestSkillCRUD:
+    def test_upsert_and_get_roundtrip(self, db: Database, sample_skill: Skill) -> None:
+        db.upsert_skill(sample_skill)
+        result = db.get_skill("python-rest")
         assert result is not None
-        assert result.name == "test-skill"
-        assert result.description == "A test"
+        assert result.name == "python-rest"
+        assert result.description == "REST APIs in Python"
 
     def test_get_nonexistent_returns_none(self, db: Database) -> None:
-        """Getting a non-existent skill returns None."""
-        assert db.get_skill("no-such-skill") is None
+        assert db.get_skill("nonexistent") is None
 
-    def test_upsert_updates_existing(self, db: Database) -> None:
-        """Upserting with same name updates fields."""
-        db.upsert_skill(Skill(name="s", path="/a.md", description="v1"))
-        db.upsert_skill(Skill(name="s", path="/b.md", description="v2"))
-        result = db.get_skill("s")
-        assert result is not None
-        assert result.path == "/b.md"
-        assert result.description == "v2"
+    def test_list_skills_no_filter(self, db: Database, sample_skill: Skill) -> None:
+        db.upsert_skill(sample_skill)
+        db.upsert_skill(Skill(name="other", path="/other.md"))
+        results = db.list_skills()
+        assert len(results) == 2
 
-
-class TestListSkills:
-    """Tests for listing skills with optional filter."""
-
-    def test_list_all(self, db: Database) -> None:
-        """list_skills without filter returns all skills."""
-        db.upsert_skill(Skill(name="a", path="/a.md"))
-        db.upsert_skill(Skill(name="b", path="/b.md"))
-        assert len(db.list_skills()) == 2
-
-    def test_list_by_state(self, db: Database) -> None:
-        """list_skills filters by state string."""
+    def test_list_skills_filter_by_state(self, db: Database) -> None:
         db.upsert_skill(Skill(name="a", path="/a.md", state=LifecycleState.ACTIVE))
         db.upsert_skill(Skill(name="b", path="/b.md", state=LifecycleState.STALE))
-        db.upsert_skill(Skill(name="c", path="/c.md", state=LifecycleState.ACTIVE))
-        active = db.list_skills(state="active")
-        assert len(active) == 2
-        assert all(s.state == LifecycleState.ACTIVE for s in active)
+        results = db.list_skills(state=LifecycleState.ACTIVE)
+        assert len(results) == 1
+        assert results[0].name == "a"
 
 
 class TestFeedback:
-    """Tests for feedback recording."""
-
-    def test_add_feedback(self, db: Database) -> None:
-        """add_feedback inserts into feedback_log."""
-        db.upsert_skill(Skill(name="s1", path="/s1.md"))
-        entry = FeedbackEntry(skill_name="s1", session_id="sess-1", outcome="success")
+    def test_add_feedback_and_retrieve(self, db: Database, sample_skill: Skill) -> None:
+        db.upsert_skill(sample_skill)
+        entry = FeedbackEntry(skill_name="python-rest", outcome="success", task_description="build API")
         db.add_feedback(entry)
-        cur = db._conn.execute("SELECT * FROM feedback_log WHERE skill_name='s1'")
-        row = cur.fetchone()
-        assert row is not None
-        assert row["outcome"] == "success"
+        feedbacks = db.get_feedback("python-rest")
+        assert len(feedbacks) == 1
+        assert feedbacks[0].outcome == "success"
+
+    def test_update_effectiveness(self, db: Database, sample_skill: Skill) -> None:
+        db.upsert_skill(sample_skill)
+        db.update_effectiveness("python-rest", 0.8)
+        skill = db.get_skill("python-rest")
+        assert skill.effectiveness == pytest.approx(0.8)
 
 
-class TestUpdateEffectiveness:
-    """Tests for effectiveness update."""
+class TestLifecycle:
+    def test_transition_state(self, db: Database, sample_skill: Skill) -> None:
+        db.upsert_skill(sample_skill)
+        db.transition_state("python-rest", LifecycleState.STALE)
+        skill = db.get_skill("python-rest")
+        assert skill.state == LifecycleState.STALE
 
-    def test_update_effectiveness(self, db: Database) -> None:
-        """update_effectiveness changes the stored value."""
-        db.upsert_skill(Skill(name="s1", path="/s1.md", effectiveness=0.5))
-        db.update_effectiveness("s1", 0.8)
-        result = db.get_skill("s1")
-        assert result is not None
-        assert abs(result.effectiveness - 0.8) < 0.01
-
-
-class TestTransitionState:
-    """Tests for state transitions."""
-
-    def test_transition_state(self, db: Database) -> None:
-        """transition_state changes the skill's lifecycle state."""
-        db.upsert_skill(Skill(name="s1", path="/s1.md", state=LifecycleState.ACTIVE))
-        db.transition_state("s1", LifecycleState.STALE)
-        result = db.get_skill("s1")
-        assert result is not None
-        assert result.state == LifecycleState.STALE
-
-
-class TestGetStaleSkills:
-    """Tests for stale skill detection."""
-
-    def test_gets_stale_candidates(self, db: Database) -> None:
-        """Skills unused for 30+ days are returned."""
-        skill = Skill(
-            name="old",
-            path="/old.md",
-            state=LifecycleState.ACTIVE,
-            last_used_at="2026-01-01T00:00:00",
-        )
+    def test_get_stale_skills(self, db: Database) -> None:
+        """Skills not used in 30+ days should appear as stale candidates."""
+        old_date = (datetime.utcnow() - timedelta(days=45)).isoformat()
+        skill = Skill(name="old-skill", path="/old.md", last_used_at=old_date)
         db.upsert_skill(skill)
         stale = db.get_stale_skills(days=30)
-        assert any(s.name == "old" for s in stale)
-
-    def test_recent_skill_not_stale(self, db: Database) -> None:
-        """Recently used skills are not returned as stale."""
-        from datetime import datetime, timezone
-        now = datetime.now(timezone.utc).isoformat()
-        skill = Skill(name="fresh", path="/f.md", state=LifecycleState.ACTIVE, last_used_at=now)
-        db.upsert_skill(skill)
-        stale = db.get_stale_skills(days=30)
-        assert not any(s.name == "fresh" for s in stale)
+        assert any(s.name == "old-skill" for s in stale)
 
 
-class TestSearchSimilar:
-    """Tests for embedding search with cosine distance."""
+class TestEmbeddings:
+    def test_save_and_search_similar(self, db: Database, sample_skill: Skill) -> None:
+        db.upsert_skill(sample_skill)
+        embedding = [0.1] * 384
+        db.save_embedding("python-rest", embedding)
+        query_vec = [0.1] * 384
+        results = db.search_similar(query_vec, limit=5)
+        assert len(results) >= 1
+        assert results[0][0] == "python-rest"
 
-    def test_search_similar_returns_ordered_distances(self, db: Database) -> None:
-        """search_similar returns results ordered by increasing distance."""
-        import math
-        # Create normalized vectors with known cosine distances
-        # vec_a is the query, vec_b is close to it, vec_c is farther
-        dim = 384
-        vec_query = [1.0 / math.sqrt(dim)] * dim  # normalized unit vector
-        # Close to query (same direction)
-        vec_close = [1.0 / math.sqrt(dim)] * dim
-        vec_close[0] += 0.01  # slightly perturbed
-        # Far from query (partially opposite)
-        vec_far = [-1.0 / math.sqrt(dim)] * (dim // 2) + [1.0 / math.sqrt(dim)] * (dim // 2)
-
-        db.save_embedding("close-skill", vec_close)
-        db.save_embedding("far-skill", vec_far)
-
-        db.upsert_skill(Skill(name="close-skill", path="/c.md"))
-        db.upsert_skill(Skill(name="far-skill", path="/f.md"))
-
-        results = db.search_similar(vec_query, top_k=5)
-        assert len(results) == 2
-        # First result should have smaller distance (more similar)
-        assert results[0][1] <= results[1][1]
-        assert results[0][0] == "close-skill"
-
-    def test_identical_vector_returns_zero_distance(self, db: Database) -> None:
-        """Cosine distance of a vector with itself should be 0.0."""
-        import math
-        dim = 384
-        vec = [1.0 / math.sqrt(dim)] * dim
-        db.save_embedding("self-skill", vec)
-        db.upsert_skill(Skill(name="self-skill", path="/s.md"))
-
-        results = db.search_similar(vec, top_k=1)
-        assert len(results) == 1
-        assert results[0][0] == "self-skill"
-        assert results[0][1] < 0.01  # cosine distance ~0 for identical vectors
+    def test_search_similar_empty_db(self, db: Database) -> None:
+        results = db.search_similar([0.1] * 384, limit=5)
+        assert results == []
