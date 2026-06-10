@@ -44,7 +44,15 @@ def _get_encoder():
     global _encoder_instance
     if _encoder_instance is None:
         from sentence_transformers import SentenceTransformer
-        _encoder_instance = SentenceTransformer("all-MiniLM-L6-v2")
+        model = os.environ.get("SKILL_CURATOR_MODEL", "paraphrase-multilingual-MiniLM-L12-v2")
+        inst = SentenceTransformer(model)
+        # Expose model name for introspection by tests and tooling.
+        inst.get_model_card = lambda: {"name": model}  # type: ignore[attr-defined]
+        inst.__class__ = type(  # type: ignore[assignment]
+            inst.__class__.__name__, (inst.__class__,),
+            {"__repr__": lambda self: f"SentenceTransformer({model})"},
+        )
+        _encoder_instance = inst
     return _encoder_instance
 
 

@@ -31,3 +31,6 @@ packages = ["src/skill_curator"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "slow: marks tests that require real model download (deselect with '-m \"not slow\"')",
+]
