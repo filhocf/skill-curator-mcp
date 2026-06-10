@@ -133,8 +133,9 @@ def skill_reindex(*, skills_dir: str, db: Database, encoder: Any) -> dict:
 
 
 def skill_scout(*, db: Database | None = None, query: str | None = None, gaps_only: bool = False) -> dict:
-    """Scout for external skills (stub)."""
-    return {"message": "Scout not yet implemented (stub)", "query": query, "gaps_only": gaps_only}
+    """Scout for external skills."""
+    from skill_curator.scout import scout_skills
+    return scout_skills(query=query, gaps_only=gaps_only, db=db)
 
 
 def get_onboarding_guide() -> dict:
