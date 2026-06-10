@@ -92,6 +92,12 @@ def reindex_all(db: Database, skills_dir: Path, encoder: Any) -> int:
     for md_file in paths:
         skill = parse_skill_md(md_file)
         embed_text = f"{skill.description or ''} {skill.trigger_text or ''}".strip()
+        if not embed_text:
+            # Fallback: use filename + first line of body
+            content = md_file.read_text(encoding="utf-8")
+            body = content.split("---", 2)[-1].strip() if "---" in content else content.strip()
+            first_line = body.split("\n")[0].lstrip("# ").strip() if body else ""
+            embed_text = f"{md_file.stem} {first_line}".strip()
         if encoder and embed_text:
             embedding = encoder.encode(embed_text)
             db.save_embedding(skill.name, embedding)

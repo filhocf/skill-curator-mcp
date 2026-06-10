@@ -71,10 +71,19 @@ class Database:
             );
 
         """)
+        # Check if existing vec0 table lacks cosine metric — drop and recreate
+        cur = self._conn.execute(
+            "SELECT sql FROM sqlite_master WHERE name='skill_embeddings'"
+        )
+        row = cur.fetchone()
+        if row and "distance_metric=cosine" not in (row[0] or ""):
+            self._conn.execute("DROP TABLE IF EXISTS skill_embeddings")
+            logger.info("Dropped skill_embeddings (missing cosine metric), will recreate.")
+
         self._conn.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS skill_embeddings USING vec0(
                 name TEXT PRIMARY KEY,
-                embedding float[384]
+                embedding float[384] distance_metric=cosine
             );
         """)
         self._conn.commit()

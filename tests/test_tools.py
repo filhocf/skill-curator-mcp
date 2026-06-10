@@ -203,3 +203,34 @@ class TestSkillScout:
         """skill_scout accepts query and gaps_only params."""
         result = skill_scout(query="python", gaps_only=True)
         assert isinstance(result, list)
+
+
+class TestSkillMatchDifferentiation:
+    """Tests for skill_match returning differentiated scores."""
+
+    def test_skill_match_differentiates_relevant_from_irrelevant(self, db: Database) -> None:
+        """skill_match scores should differ based on embedding similarity."""
+        import math
+
+        dim = 384
+        # Relevant skill vector: aligned with query
+        relevant_vec = [1.0 / math.sqrt(dim)] * dim
+        # Irrelevant skill vector: opposite direction
+        irrelevant_vec = [-1.0 / math.sqrt(dim)] * dim
+
+        _insert_skill(db, "relevant", effectiveness=0.5)
+        _insert_skill(db, "irrelevant", effectiveness=0.5)
+        db.save_embedding("relevant", relevant_vec)
+        db.save_embedding("irrelevant", irrelevant_vec)
+
+        # Encoder returns vector aligned with relevant_vec
+        encoder = MagicMock()
+        encoder.encode.return_value = relevant_vec
+
+        results = skill_match(db, "deploy kubernetes", encoder, top_k=5)
+        assert len(results) == 2
+        relevant_result = next(r for r in results if r["name"] == "relevant")
+        irrelevant_result = next(r for r in results if r["name"] == "irrelevant")
+        # Relevant skill should score significantly higher
+        assert relevant_result["score"] > irrelevant_result["score"]
+        assert relevant_result["score"] > 0.3

@@ -143,3 +143,45 @@ class TestGetStaleSkills:
         db.upsert_skill(skill)
         stale = db.get_stale_skills(days=30)
         assert not any(s.name == "fresh" for s in stale)
+
+
+class TestSearchSimilar:
+    """Tests for embedding search with cosine distance."""
+
+    def test_search_similar_returns_ordered_distances(self, db: Database) -> None:
+        """search_similar returns results ordered by increasing distance."""
+        import math
+        # Create normalized vectors with known cosine distances
+        # vec_a is the query, vec_b is close to it, vec_c is farther
+        dim = 384
+        vec_query = [1.0 / math.sqrt(dim)] * dim  # normalized unit vector
+        # Close to query (same direction)
+        vec_close = [1.0 / math.sqrt(dim)] * dim
+        vec_close[0] += 0.01  # slightly perturbed
+        # Far from query (partially opposite)
+        vec_far = [-1.0 / math.sqrt(dim)] * (dim // 2) + [1.0 / math.sqrt(dim)] * (dim // 2)
+
+        db.save_embedding("close-skill", vec_close)
+        db.save_embedding("far-skill", vec_far)
+
+        db.upsert_skill(Skill(name="close-skill", path="/c.md"))
+        db.upsert_skill(Skill(name="far-skill", path="/f.md"))
+
+        results = db.search_similar(vec_query, top_k=5)
+        assert len(results) == 2
+        # First result should have smaller distance (more similar)
+        assert results[0][1] <= results[1][1]
+        assert results[0][0] == "close-skill"
+
+    def test_identical_vector_returns_zero_distance(self, db: Database) -> None:
+        """Cosine distance of a vector with itself should be 0.0."""
+        import math
+        dim = 384
+        vec = [1.0 / math.sqrt(dim)] * dim
+        db.save_embedding("self-skill", vec)
+        db.upsert_skill(Skill(name="self-skill", path="/s.md"))
+
+        results = db.search_similar(vec, top_k=1)
+        assert len(results) == 1
+        assert results[0][0] == "self-skill"
+        assert results[0][1] < 0.01  # cosine distance ~0 for identical vectors

@@ -28,7 +28,7 @@ def skill_match(
         skill = db.get_skill(name)
         if skill is None or skill.state != LifecycleState.ACTIVE:
             continue
-        similarity = max(0.0, 1.0 - distance)
+        similarity = max(0.0, 1.0 - distance / 2.0)
         profile_match = name in profile if profile else False
         score = composite_score(similarity, skill.effectiveness, profile_match)
         ranked.append({
