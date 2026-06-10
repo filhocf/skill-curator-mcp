@@ -138,6 +138,22 @@ def skill_scout(*, db: Database | None = None, query: str | None = None, gaps_on
     return scout_skills(query=query, gaps_only=gaps_only, db=db)
 
 
+def skill_auto_maintain(*, db: Database) -> dict:
+    """Run auto-stale and auto-archive in sequence.
+
+    Args:
+        db: Database instance.
+
+    Returns:
+        Summary dict with staled and archived skill names.
+    """
+    from skill_curator.lifecycle import auto_archive, auto_stale
+
+    staled = auto_stale(db)
+    archived = auto_archive(db)
+    return {"staled": staled, "archived": archived}
+
+
 def get_onboarding_guide() -> dict:
     """Return onboarding guide for MCP clients."""
     return {
