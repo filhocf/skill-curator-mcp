@@ -8,6 +8,7 @@ from mcp.server.fastmcp import FastMCP
 from skill_curator.tools import (
     get_onboarding_guide as _get_onboarding_guide,
     skill_archive as _skill_archive,
+    skill_audit as _skill_audit,
     skill_feedback as _skill_feedback,
     skill_gaps as _skill_gaps,
     skill_lifecycle as _skill_lifecycle,
@@ -102,6 +103,12 @@ def skill_reindex() -> dict:
 def skill_scout(query: str | None = None, gaps_only: bool = False) -> dict:
     """Scout for new skills from external sources."""
     return _skill_scout(db=_get_db(), query=query, gaps_only=gaps_only)
+
+
+@mcp.tool()
+def skill_audit(skills_dir: str | None = None) -> list[dict]:
+    """Audit all skills for quality issues."""
+    return _skill_audit(skills_dir=skills_dir or _skills_dir)
 
 
 @mcp.tool()

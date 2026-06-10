@@ -6,14 +6,15 @@
 ┌──────────────────────────────────────────────────────────┐
 │                   skill-curator-mcp                       │
 │                  (FastMCP, port 3204)                     │
-├──────────────┬──────────────┬─────────────┬──────────────┤
-│   server.py  │  indexer.py  │ scoring.py  │  scout.py    │
-│  (MCP tools) │ (filesystem  │ (rank +     │ (HTTP →      │
-│              │  scan + emb) │  feedback)  │  external)   │
-├──────────────┴──────────────┴─────────────┴──────────────┤
-│                        db.py                              │
-│           (SQLite WAL + sqlite-vec + migrations)          │
-├──────────────────────────────────────────────────────────┤
+├──────────┬──────────┬──────────┬──────────┬──────────────┤
+│ server.py│indexer.py│scoring.py│ scout.py │ lifecycle.py │
+│(9 tools) │(scan+emb)│(rank+    │(GitHub   │(auto-stale   │
+│          │          │ composite│ search)  │ auto-archive)│
+├──────────┼──────────┴──────────┴──────────┴──────────────┤
+│profile.py│                  db.py                         │
+│(agent    │      (SQLite WAL + sqlite-vec + cosine)        │
+│ profiles)│                                                │
+├──────────┴───────────────────────────────────────────────┤
 │  Storage: ~/.local/share/skill-curator/curator.db         │
 └──────────────────────────────────────────────────────────┘
          ↕ StreamableHTTP (localhost:3204)
@@ -34,17 +35,29 @@
 
 | Módulo | Responsabilidade |
 |--------|-----------------|
-| `server.py` | Registro das 8 tools no FastMCP, validação de input |
-| `db.py` | Conexão SQLite, migrations, queries parametrizadas |
-| `indexer.py` | Scan de filesystem, extração de metadata, geração de embeddings |
-| `scoring.py` | Cosine similarity via sqlite-vec, cálculo do score composto |
-| `scout.py` | HTTP client (httpx) para skills-manager, GitHub, Anthropic |
-| `models.py` | Dataclasses/TypedDicts para Skill, Feedback, Gap, ScoutResult |
+| `server.py` | Registro das 9 tools no FastMCP, lazy init de DB e encoder |
+| `tools.py` | Lógica de negócio das tools (match, feedback, gaps, lifecycle, scout) |
+| `db.py` | Conexão SQLite WAL, sqlite-vec, CRUD skills/feedback/scouted |
+| `indexer.py` | Scan filesystem, parse frontmatter YAML, geração de embeddings |
+| `scoring.py` | `cosine_similarity` e `composite_score` (0.6/0.2/0.2) |
+| `scorer.py` | Scoring auxiliar (legacy, predecessor de scoring.py) |
+| `scout.py` | HTTP client (httpx) para GitHub search + cache 24h |
+| `lifecycle.py` | `auto_stale`, `auto_archive`, `detect_promotion_candidates`, `generate_draft_skill` |
+| `profile.py` | Carrega `expected_skills` de agent profiles JSON (~/.kiro/agents/) |
+| `models.py` | Dataclasses: Skill, FeedbackEntry, ScoutedSkill; Enum: LifecycleState |
+
+## Embedding Model
+
+**paraphrase-multilingual-MiniLM-L12-v2** (sentence-transformers)
+
+- 384 dimensões
+- Suporte multilíngue (50+ idiomas)
+- Latência <50ms por embedding em CPU
+- Configurável via `SKILL_CURATOR_MODEL` env var
 
 ## Storage — Schema SQLite
 
 ```sql
--- Core: skills indexadas do filesystem
 CREATE TABLE skills (
     name TEXT PRIMARY KEY,
     path TEXT NOT NULL,
@@ -55,13 +68,12 @@ CREATE TABLE skills (
     total_successes INTEGER DEFAULT 0,
     gap_count INTEGER DEFAULT 0,
     state TEXT DEFAULT 'active',  -- active|stale|archived|draft
-    profile_tags TEXT,            -- JSON array
+    profile_tags TEXT,
     last_used_at TEXT,
     last_indexed_at TEXT,
     created_at TEXT
 );
 
--- Histórico de feedback
 CREATE TABLE feedback_log (
     id INTEGER PRIMARY KEY,
     skill_name TEXT REFERENCES skills(name),
@@ -71,7 +83,6 @@ CREATE TABLE feedback_log (
     created_at TEXT
 );
 
--- Skills externas descobertas pelo scout
 CREATE TABLE scouted_skills (
     id INTEGER PRIMARY KEY,
     source_url TEXT NOT NULL,
@@ -83,10 +94,9 @@ CREATE TABLE scouted_skills (
     discovered_at TEXT
 );
 
--- Embeddings vetoriais (sqlite-vec)
 CREATE VIRTUAL TABLE skill_embeddings USING vec0(
     name TEXT PRIMARY KEY,
-    embedding float[384]
+    embedding float[384] distance_metric=cosine
 );
 ```
 
@@ -100,7 +110,7 @@ score_final = 0.6 * cosine_similarity + 0.2 * effectiveness + 0.2 * profile_matc
 
 | Componente | Range | Fonte |
 |-----------|-------|-------|
-| cosine_similarity | 0.0–1.0 | sqlite-vec: embedding(task) vs embedding(skill.description + trigger) |
+| cosine_similarity | 0.0–1.0 | `1.0 - cosine_distance/2.0` (sqlite-vec cosine distance range 0–2) |
 | effectiveness | 0.0–1.0 | EMA com α=0.3, default 0.5 |
 | profile_match | 0.0 ou 1.0 | 1.0 se skill.name ∈ profile.expected_skills |
 
@@ -114,11 +124,11 @@ EMA update: `new_eff = α * outcome_value + (1-α) * old_eff`
          (eff > 0.7 && uses >= 3)
   draft ──────────────────────────→ active
                                       │
-                           no use 30d │
+                           no use 30d │ (auto_stale)
                                       ▼
                                     stale
                                    │     │
-                          used again│     │ no use 90d OR eff < 0.3
+                          used again│     │ no use 90d OR eff < 0.3 (auto_archive)
                                    ▼     ▼
                                 active  archived
                                           │
@@ -128,38 +138,32 @@ EMA update: `new_eff = α * outcome_value + (1-α) * old_eff`
                                         active
 ```
 
-Estados: `draft` → `active` → `stale` → `archived`
-Qualquer estado pode retornar a `active` via `skill_promote()`.
+## Multi-machine Sync
+
+Sync via filesystem (ex: Dropbox, git, rsync):
+
+- `scripts/hot-backup.sh` — `VACUUM INTO` para criar cópia consistente
+- `scripts/restore-from-sync.sh` — restaura DB se local ausente no startup
+- Destino configurável: `SKILL_CURATOR_SYNC_DIR` (default: `~/dtp/ai-configs/global`)
 
 ## Integração com Kiro CLI
 
 | Hook | Momento | Tool chamada |
 |------|---------|--------------|
-| startup | Início de sessão CAO | `skill_reindex()` |
+| startup | Início de sessão | `skill_reindex()` |
 | shutdown | Fim de sessão | `skill_gaps()` |
-| steering | Antes de cada task delegada | `skill_match(task)` |
-
-O steering injeta skills retornadas no system prompt do worker via context.
+| steering | Antes de cada task | `skill_match(task, profile=...)` |
 
 ## Decisões Técnicas
 
-### Por que FastMCP (não Flask/raw HTTP)?
-- SDK oficial do protocolo MCP — garante compatibilidade com tools, resources, prompts.
-- StreamableHTTP built-in, sem boilerplate de transport.
-- Type-safe tool registration com decorators.
+### Por que FastMCP?
+SDK oficial MCP — StreamableHTTP built-in, type-safe tool registration.
 
-### Por que sqlite-vec (não FAISS/Chroma)?
-- Zero infra extra — single file, embeddable no mesmo SQLite do estado.
-- Performance suficiente para <1000 skills (nosso caso).
-- Queries combinam filtros SQL + KNN sem join externo.
+### Por que sqlite-vec com cosine distance?
+Single file, zero infra. Performance OK para <1000 skills. Ver [ADR 001](docs/decisions/001-cosine-distance.md).
 
 ### Por que separado do memory-service?
-- Responsabilidades distintas: memory = episódico/long-term; curator = operacional/runtime.
-- Ciclo de release independente — curator pode iterar sem risco de regressão no memory.
-- Dados diferentes: memory guarda texto livre; curator guarda metadata estruturada + embeddings de skills.
-- Acesso concurrent: memory é read-heavy; curator é write-heavy durante reindex.
+Responsabilidades distintas (episódico vs operacional), ciclo de release independente, patterns de acesso diferentes.
 
-### Por que MiniLM-L6-v2?
-- 384 dims — leve para sqlite-vec.
-- Latência <50ms por embedding em CPU.
-- Qualidade suficiente para matching de descriptions curtas (1-3 frases).
+### Por que paraphrase-multilingual-MiniLM-L12-v2?
+Suporte a skills escritas em português/inglês/espanhol sem reindexação por idioma. Mesmo tamanho (384d) que o L6 monolíngue anterior.

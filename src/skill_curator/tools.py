@@ -173,3 +173,15 @@ def get_onboarding_guide() -> dict:
         "scoring": "0.6*similarity + 0.2*effectiveness + 0.2*profile_match; EMA α=0.3",
         "notes": "Use skill_reindex at session start, skill_gaps at shutdown.",
     }
+
+
+def skill_audit(*, skills_dir: str | None = None) -> list[dict]:
+    """Audit all skills for quality issues."""
+    from skill_curator.audit import audit_all
+    import dataclasses
+    import os
+
+    if skills_dir is None:
+        skills_dir = os.environ.get("SKILL_CURATOR_SKILLS_DIR", os.path.expanduser("~/.kiro/skills"))
+    reports = audit_all(Path(skills_dir))
+    return [dataclasses.asdict(r) for r in reports]
