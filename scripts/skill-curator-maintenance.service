@@ -1,0 +1,12 @@
+[Unit]
+Description=Skill Curator Daily Maintenance
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/git/skill-curator-mcp/.venv/bin/python %h/git/skill-curator-mcp/scripts/daily-maintenance.py
+Environment=SKILL_CURATOR_DB_DIR=%h/.local/share/skill-curator
+Environment=SKILL_CURATOR_SKILLS_DIR=%h/.kiro/skills
+
+[Install]
+WantedBy=default.target
