@@ -154,8 +154,10 @@ class Database:
         """Save or replace an embedding for a skill."""
         import struct
         blob = struct.pack(f"{len(embedding)}f", *embedding)
+        # sqlite-vec virtual tables don't support INSERT OR REPLACE
+        self.conn.execute("DELETE FROM skill_embeddings WHERE name = ?", (name,))
         self.conn.execute(
-            "INSERT OR REPLACE INTO skill_embeddings (name, embedding) VALUES (?, ?)",
+            "INSERT INTO skill_embeddings (name, embedding) VALUES (?, ?)",
             (name, blob),
         )
         self.conn.commit()
