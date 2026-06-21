@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import time
 
 from mcp.server.fastmcp import FastMCP
 
@@ -25,6 +26,8 @@ _db_dir = os.environ.get("SKILL_CURATOR_DB_DIR", os.path.expanduser("~/.local/sh
 mcp = FastMCP("skill-curator", host="127.0.0.1", port=_port,
               instructions="Skill lifecycle intelligence — semantic matching, feedback loop, gap detection, scout.")
 
+_start_time = time.time()
+
 # Provide sync list_tools for testing compatibility
 mcp.list_tools = mcp._tool_manager.list_tools  # type: ignore[assignment]
 
@@ -44,9 +47,11 @@ def _get_db():
 def _get_encoder():
     global _encoder_instance
     if _encoder_instance is None:
+        os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")  # Force CPU — avoids crash on incompatible GPUs
         from sentence_transformers import SentenceTransformer
         model = os.environ.get("SKILL_CURATOR_MODEL", "paraphrase-multilingual-MiniLM-L12-v2")
-        inst = SentenceTransformer(model)
+        device = os.environ.get("SKILL_CURATOR_DEVICE", "cpu")
+        inst = SentenceTransformer(model, device=device)
         # Expose model name for introspection by tests and tooling.
         inst.get_model_card = lambda: {"name": model}  # type: ignore[attr-defined]
         inst.__class__ = type(  # type: ignore[assignment]
@@ -115,6 +120,31 @@ def skill_audit(skills_dir: str | None = None) -> list[dict]:
 def get_onboarding_guide() -> dict:
     """Get integration guide for using the skill-curator MCP."""
     return _get_onboarding_guide()
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health_check(request):
+    from starlette.responses import JSONResponse
+    from . import __version__
+
+    checks = {}
+    status = "healthy"
+    try:
+        dbi = _get_db()
+        dbi.conn.execute("SELECT 1")
+        count = dbi.conn.execute("SELECT count(*) FROM skills").fetchone()[0]
+        checks["db"] = {"status": "ok"}
+        checks["skills_indexed"] = count
+    except Exception as e:
+        checks["db"] = {"status": "error", "detail": str(e)}
+        status = "unhealthy"
+    checks["model_loaded"] = _encoder_instance is not None
+    return JSONResponse({
+        "status": status,
+        "version": __version__,
+        "uptime_seconds": round(time.time() - _start_time),
+        "checks": checks,
+    })
 
 
 def main():
