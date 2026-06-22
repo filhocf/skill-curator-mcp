@@ -1,6 +1,6 @@
 [project]
 name = "skill-curator-mcp"
-version = "0.1.1"
+version = "0.1.2"
 description = "Skill lifecycle intelligence MCP — semantic matching, feedback loop, gap detection, scout"
 authors = [{name = "Claudio Ferreira Filho", email = "claudio.filho@dataprev.gov.br"}]
 license = {text = "Apache-2.0"}
