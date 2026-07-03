@@ -1,5 +1,6 @@
 """Tests for skill_curator.tools — MCP tool functions (phase 0.2.0 RED)."""
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -260,3 +261,212 @@ class TestGetOnboardingGuide:
     def test_tools_has_nine_entries(self) -> None:
         result = get_onboarding_guide()
         assert len(result["tools"]) == 9
+
+
+# === skill_evolve ===
+
+
+class TestSkillEvolve:
+    """Integration tests for skill_evolve tool function."""
+
+    @pytest.fixture
+    def skill_env(self, tmp_path: Path, db: Database) -> tuple[Database, Path, Path]:
+        """Set up a skill file + DB entry + failures for evolution."""
+        from skill_curator.models import Skill, LifecycleState
+
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        skill_path = skills_dir / "evolve-me.md"
+        skill_path.write_text(
+            "# Evolve Me\n\n## Steps\nold step content\n\n## Notes\nkeep this\n",
+            encoding="utf-8",
+        )
+
+        db.upsert_skill(Skill(name="evolve-me", path=str(skill_path), description="A skill to evolve",
+                              effectiveness=0.7, total_uses=5, state=LifecycleState.ACTIVE))
+
+        # Seed 3 failures so eligibility passes
+        for _ in range(3):
+            db.conn.execute(
+                "INSERT INTO feedback_log (skill_name, outcome, task_description, created_at) VALUES (?, 'failure', 'task', ?)",
+                ("evolve-me", datetime.utcnow().isoformat()),
+            )
+        db.conn.commit()
+
+        return db, skills_dir, skill_path
+
+    def test_evolve_dry_run_shows_preview(self, skill_env) -> None:
+        from skill_curator.tools import skill_evolve
+
+        db, skills_dir, skill_path = skill_env
+        result = skill_evolve(
+            "evolve-me",
+            correction="new improved steps",
+            task_description="testing dry run",
+            section="Steps",
+            dry_run=True,
+            db=db,
+            skills_dir=str(skills_dir),
+        )
+        assert result["dry_run"] is True
+        assert result["applied"] is False
+        assert "diff_summary" in result
+        # File should NOT be modified
+        assert "old step content" in skill_path.read_text(encoding="utf-8")
+
+    def test_evolve_applies_and_versions(self, skill_env) -> None:
+        from skill_curator.tools import skill_evolve
+
+        db, skills_dir, skill_path = skill_env
+        result = skill_evolve(
+            "evolve-me",
+            correction="new improved steps",
+            task_description="testing apply",
+            section="Steps",
+            dry_run=False,
+            db=db,
+            skills_dir=str(skills_dir),
+        )
+        assert result["applied"] is True
+        assert result["effectiveness_reset"] is True
+        assert "version_path" in result
+        # File should be modified
+        content = skill_path.read_text(encoding="utf-8")
+        assert "new improved steps" in content
+        assert "old step content" not in content
+        # Version file should exist
+        assert Path(result["version_path"]).exists()
+        # Evolution logged in DB
+        row = db.conn.execute("SELECT * FROM skill_evolutions WHERE skill_name='evolve-me'").fetchone()
+        assert row is not None
+        # Effectiveness reset to 0.5
+        skill = db.get_skill("evolve-me")
+        assert skill.effectiveness == pytest.approx(0.5)
+
+    def test_evolve_skill_not_found(self, db: Database, tmp_path: Path) -> None:
+        from skill_curator.tools import skill_evolve
+
+        result = skill_evolve(
+            "nonexistent",
+            correction="fix",
+            db=db,
+            skills_dir=str(tmp_path),
+        )
+        assert "error" in result
+
+    def test_evolve_ineligible_blocks_write(self, tmp_path: Path, db: Database) -> None:
+        from skill_curator.tools import skill_evolve
+        from skill_curator.models import Skill, LifecycleState
+
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        skill_path = skills_dir / "blocked.md"
+        skill_path.write_text("# Blocked\n\n## Steps\ncontent\n", encoding="utf-8")
+        db.upsert_skill(Skill(name="blocked", path=str(skill_path), description="Blocked skill",
+                              state=LifecycleState.ACTIVE))
+        # No failures → ineligible
+        result = skill_evolve(
+            "blocked",
+            correction="new content",
+            section="Steps",
+            dry_run=False,
+            db=db,
+            skills_dir=str(skills_dir),
+        )
+        assert "error" in result
+        assert "hint" in result
+        # File unchanged
+        assert "content" in skill_path.read_text(encoding="utf-8")
+
+        # But dry_run still works even if ineligible
+        result_dry = skill_evolve(
+            "blocked",
+            correction="new content",
+            section="Steps",
+            dry_run=True,
+            db=db,
+            skills_dir=str(skills_dir),
+        )
+        assert result_dry["dry_run"] is True
+        assert "diff_summary" in result_dry
+
+
+# === skill_rollback ===
+
+
+class TestSkillRollback:
+    """Integration tests for skill_rollback tool function."""
+
+    @pytest.fixture
+    def evolved_env(self, tmp_path: Path, db: Database) -> tuple[Database, Path, Path, str]:
+        """Set up a skill that has been evolved (has a version)."""
+        from skill_curator.tools import skill_evolve
+        from skill_curator.models import Skill, LifecycleState
+
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        skill_path = skills_dir / "rollback-me.md"
+        original_content = "# Rollback Me\n\n## Steps\noriginal steps\n\n## Notes\nkeep\n"
+        skill_path.write_text(original_content, encoding="utf-8")
+
+        db.upsert_skill(Skill(name="rollback-me", path=str(skill_path), description="Rollback test",
+                              effectiveness=0.7, total_uses=5, state=LifecycleState.ACTIVE))
+        # Seed failures for eligibility
+        for _ in range(3):
+            db.conn.execute(
+                "INSERT INTO feedback_log (skill_name, outcome, task_description, created_at) VALUES (?, 'failure', 'task', ?)",
+                ("rollback-me", datetime.utcnow().isoformat()),
+            )
+        db.conn.commit()
+
+        # Evolve it
+        result = skill_evolve(
+            "rollback-me",
+            correction="evolved steps",
+            task_description="evolve for rollback test",
+            section="Steps",
+            dry_run=False,
+            db=db,
+            skills_dir=str(skills_dir),
+        )
+        version_path = result["version_path"]
+        return db, skills_dir, skill_path, original_content
+
+    def test_rollback_restores_version(self, evolved_env) -> None:
+        from skill_curator.tools import skill_rollback
+
+        db, skills_dir, skill_path, original_content = evolved_env
+        # Current content should be evolved
+        assert "evolved steps" in skill_path.read_text(encoding="utf-8")
+
+        result = skill_rollback("rollback-me", db=db, skills_dir=str(skills_dir))
+        assert result["restored"] is True
+        # Content should match original
+        restored = skill_path.read_text(encoding="utf-8")
+        assert restored == original_content
+
+    def test_rollback_no_versions_error(self, tmp_path: Path, db: Database) -> None:
+        from skill_curator.tools import skill_rollback
+        from skill_curator.models import Skill, LifecycleState
+
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        skill_path = skills_dir / "no-versions.md"
+        skill_path.write_text("# No Versions\n", encoding="utf-8")
+        db.upsert_skill(Skill(name="no-versions", path=str(skill_path), description="No versions",
+                              state=LifecycleState.ACTIVE))
+
+        result = skill_rollback("no-versions", db=db, skills_dir=str(skills_dir))
+        assert "error" in result
+        assert "No versions" in result["error"]
+
+    def test_rollback_resets_effectiveness(self, evolved_env) -> None:
+        from skill_curator.tools import skill_rollback
+
+        db, skills_dir, skill_path, original_content = evolved_env
+        # Evolve changed effectiveness to 0.5, let's bump it to distinguish
+        db.update_effectiveness("rollback-me", 0.8)
+        assert db.get_skill("rollback-me").effectiveness == pytest.approx(0.8)
+
+        skill_rollback("rollback-me", db=db, skills_dir=str(skills_dir))
+        assert db.get_skill("rollback-me").effectiveness == pytest.approx(0.5)

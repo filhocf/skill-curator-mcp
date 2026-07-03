@@ -198,3 +198,122 @@ def skill_audit(*, skills_dir: str | None = None) -> list[dict]:
         skills_dir = os.environ.get("SKILL_CURATOR_SKILLS_DIR", os.path.expanduser("~/.kiro/skills"))
     reports = audit_all(Path(skills_dir))
     return [dataclasses.asdict(r) for r in reports]
+
+
+def skill_evolve(
+    name: str,
+    *,
+    correction: str,
+    task_description: str = "",
+    section: str | None = None,
+    dry_run: bool = True,
+    db: "Database",
+    skills_dir: str,
+    encoder: Any = None,
+) -> dict:
+    """Evolve a skill by applying a correction to its content.
+
+    Returns diff summary. If dry_run=False, writes the change and versions the original.
+    """
+    from skill_curator.evolution import (
+        apply_evolution,
+        check_evolve_eligibility,
+        log_evolution,
+        save_version,
+        write_evolved_skill,
+    )
+
+    skill = db.get_skill(name)
+    if not skill:
+        return {"error": f"Skill '{name}' not found in database."}
+
+    skill_path = Path(skill.path)
+    if not skill_path.exists():
+        return {"error": f"Skill file not found: {skill_path}"}
+
+    # Check eligibility (min failures + cooldown)
+    eligibility_error = check_evolve_eligibility(name, db)
+    if eligibility_error and not dry_run:
+        return {"error": eligibility_error, "hint": "Use dry_run=True to preview without eligibility check."}
+
+    # Apply evolution
+    try:
+        original, new_content = apply_evolution(skill_path, correction, section)
+    except ValueError as e:
+        return {"error": str(e)}
+
+    # Generate diff summary
+    orig_lines = original.splitlines()
+    new_lines = new_content.splitlines()
+    added = len([l for l in new_lines if l not in orig_lines])
+    removed = len([l for l in orig_lines if l not in new_lines])
+    diff_summary = f"+{added}/-{removed} lines. Section: {section or 'append'}. Correction: {correction[:100]}"
+
+    if dry_run:
+        return {
+            "applied": False,
+            "dry_run": True,
+            "diff_summary": diff_summary,
+            "preview_lines": new_content.splitlines()[-10:],
+        }
+
+    # Write version + evolve + log + reset effectiveness + reindex
+    version_path = save_version(skill_path, original)
+    write_evolved_skill(skill_path, new_content)
+    log_evolution(db, name, correction, task_description, section, diff_summary, version_path)
+    db.update_effectiveness(name, 0.5)  # Reset — skill must prove itself again
+
+    # Reindex if encoder available
+    if encoder:
+        from skill_curator.tools import skill_reindex as _reindex
+        _reindex(skills_dir=skills_dir, db=db, encoder=encoder)
+
+    return {
+        "applied": True,
+        "diff_summary": diff_summary,
+        "version_path": version_path,
+        "effectiveness_reset": True,
+    }
+
+
+def skill_rollback(name: str, *, version: str | None = None, db: "Database", skills_dir: str, encoder: Any = None) -> dict:
+    """Rollback a skill to a previous version.
+
+    If version is None, restores the latest version.
+    """
+    from skill_curator.evolution import get_latest_version
+
+    import os
+    if skills_dir is None:
+        skills_dir = os.environ.get("SKILL_CURATOR_SKILLS_DIR", os.path.expanduser("~/.kiro/skills"))
+
+    skill = db.get_skill(name)
+    if not skill:
+        return {"error": f"Skill '{name}' not found."}
+
+    skill_path = Path(skill.path)
+
+    if version:
+        version_path = Path(version)
+    else:
+        latest = get_latest_version(skill_path)
+        if not latest:
+            return {"error": f"No versions found for skill '{name}'."}
+        version_path = Path(latest)
+
+    if not version_path.exists():
+        return {"error": f"Version file not found: {version_path}"}
+
+    # Restore
+    restored_content = version_path.read_text(encoding="utf-8")
+    skill_path.write_text(restored_content, encoding="utf-8")
+
+    # Reset effectiveness
+    db.update_effectiveness(name, 0.5)
+
+    # Reindex if encoder available
+    if encoder:
+        from skill_curator.tools import skill_reindex as _reindex
+        _reindex(skills_dir=skills_dir, db=db, encoder=encoder)
+
+    return {"restored": True, "from": str(version_path), "effectiveness_reset": True}

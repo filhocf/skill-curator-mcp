@@ -2,6 +2,24 @@
 
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.2.0] - 2026-07-03
+
+### Added
+- `evolution.py` — skill auto-correction loop (RFC-skill-evolution.md)
+- `skill_evolve` tool — apply corrections to skill content with versioning
+- `skill_rollback` tool — restore previous version from `.versions/`
+- `skill_evolutions` table — tracks all evolution events
+- Version preservation: `.versions/{name}.{timestamp}.md` before overwrite
+- Safety guards: min 2 failures + 1h cooldown + dry_run default
+- `tests/test_evolution.py` — 17 unit tests for evolution module
+- Integration tests for skill_evolve + skill_rollback in test_tools.py
+- docs/RFC-skill-evolution.md — full RFC document
+- Integration guide updated with evolve/rollback steps
+
+### Changed
+- Server now exposes 12 tools (was 10)
+- Effectiveness resets to 0.5 after evolution (skill must re-prove)
+
 ## [1.0.0] - 2026-06-10
 
 ### Added

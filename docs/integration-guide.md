@@ -73,6 +73,35 @@ skill_lifecycle()
 
 Use `skill_promote(name)` and `skill_archive(name)` to act on candidates.
 
+### 6. On Failure: `skill_evolve(name, correction, task_description)`
+
+When a skill is wrong or incomplete AND you know the fix:
+
+```python
+# Preview the change (dry_run=True is default)
+skill_evolve(name="rer-k8s-deploy", correction="Add cert-manager step before ingress creation",
+             task_description="deploy failed because cert wasn't ready", section="Steps")
+# Returns: {"dry_run": True, "diff_summary": "+2/-0 lines. Section: Steps...", "preview_lines": [...]}
+
+# Apply the correction
+skill_evolve(name="rer-k8s-deploy", correction="Add cert-manager step before ingress creation",
+             task_description="deploy failed because cert wasn't ready", section="Steps", dry_run=False)
+# Returns: {"applied": True, "diff_summary": "...", "version_path": "~/.kiro/skills/.versions/rer-k8s-deploy.2026-07-03T15-30-00.md", "effectiveness_reset": True}
+```
+
+**Requirements**: ≥2 failures in the last 7 days + cooldown of 1h since last evolution.
+
+**Safety**: Original skill is versioned in `.versions/` before overwrite. Use `skill_rollback(name)` to restore.
+
+### 7. On Mistake: `skill_rollback(name)`
+
+If an evolution made things worse:
+
+```python
+skill_rollback(name="rer-k8s-deploy")
+# Returns: {"restored": True, "from": ".versions/rer-k8s-deploy.2026-07-03T15-30-00.md", "effectiveness_reset": True}
+```
+
 ## System Prompt Template
 
 Add this to your agent's system prompt for automatic integration:
@@ -82,6 +111,7 @@ Add this to your agent's system prompt for automatic integration:
 Before implementing any task, call `skill_match(task="summary of the task")`.
 If score > 0.5: read the skill file and follow it.
 After using a skill: `skill_feedback(name="skill-name", outcome="success|failure", task_description="what happened")`.
+If a skill was wrong AND you know the fix: `skill_evolve(name, correction, task_description, dry_run=False)`.
 ```
 
 ## Why Feedback Matters

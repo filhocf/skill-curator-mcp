@@ -36,6 +36,19 @@ CREATE TABLE IF NOT EXISTS feedback_log (
     created_at TEXT
 );
 
+
+CREATE TABLE IF NOT EXISTS skill_evolutions (
+    id INTEGER PRIMARY KEY,
+    skill_name TEXT NOT NULL,
+    evolved_at TEXT NOT NULL,
+    correction TEXT NOT NULL,
+    task_description TEXT,
+    section_modified TEXT,
+    diff_summary TEXT,
+    previous_version TEXT,
+    triggered_by TEXT DEFAULT 'agent'
+);
+
 CREATE TABLE IF NOT EXISTS scouted_skills (
     id INTEGER PRIMARY KEY,
     source_url TEXT NOT NULL,

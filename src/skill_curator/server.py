@@ -10,12 +10,14 @@ from skill_curator.tools import (
     get_onboarding_guide as _get_onboarding_guide,
     skill_archive as _skill_archive,
     skill_audit as _skill_audit,
+    skill_evolve as _skill_evolve,
     skill_feedback as _skill_feedback,
     skill_gaps as _skill_gaps,
     skill_lifecycle as _skill_lifecycle,
     skill_match as _skill_match,
     skill_promote as _skill_promote,
     skill_reindex as _skill_reindex,
+    skill_rollback as _skill_rollback,
     skill_scout as _skill_scout,
 )
 
@@ -121,6 +123,21 @@ def get_onboarding_guide() -> dict:
     """Get integration guide for using the skill-curator MCP."""
     return _get_onboarding_guide()
 
+
+
+
+@mcp.tool()
+def skill_evolve(name: str, correction: str, task_description: str = "", section: str | None = None, dry_run: bool = True) -> dict:
+    """Evolve a skill by applying a correction. Versions the original, rewrites content, resets effectiveness."""
+    return _skill_evolve(name, correction=correction, task_description=task_description,
+                         section=section, dry_run=dry_run, db=_get_db(),
+                         skills_dir=_skills_dir, encoder=_get_encoder())
+
+
+@mcp.tool()
+def skill_rollback(name: str, version: str | None = None) -> dict:
+    """Rollback a skill to a previous version from .versions/ directory."""
+    return _skill_rollback(name, version=version, db=_get_db(), skills_dir=_skills_dir, encoder=_get_encoder())
 
 @mcp.custom_route("/health", methods=["GET"])
 async def health_check(request):
