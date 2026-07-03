@@ -158,6 +158,19 @@ def get_onboarding_guide() -> dict:
     """Return onboarding guide for MCP clients."""
     return {
         "quick_start": "Call skill_match before each task to get relevant skills.",
+        "integration_cycle": {
+            "1_startup": "skill_reindex() — rescan skills dir, update embeddings",
+            "2_each_task": "skill_match(task='summary') — if score > 0.5, read and follow the skill",
+            "3_post_task": "skill_feedback(name='skill', outcome='success|partial|failure') — improves future matching",
+            "4_shutdown": "skill_gaps() — detect tasks that had no matching skill",
+            "5_weekly": "skill_lifecycle() — review promote/archive candidates",
+        },
+        "system_prompt_example": (
+            "## Skills\n"
+            "Before implementing any task, call `skill_match(task=\"summary\")`.\n"
+            "If score > 0.5: read the skill and follow it.\n"
+            "After using a skill: `skill_feedback(name=\"skill\", outcome=\"success|failure\")`."
+        ),
         "tools": [
             {"name": "skill_match", "description": "Semantic skill matching for a task"},
             {"name": "skill_feedback", "description": "Record outcome feedback for a skill"},
@@ -171,7 +184,7 @@ def get_onboarding_guide() -> dict:
         ],
         "protocol": "StreamableHTTP on localhost",
         "scoring": "0.6*similarity + 0.2*effectiveness + 0.2*profile_match; EMA α=0.3",
-        "notes": "Use skill_reindex at session start, skill_gaps at shutdown.",
+        "notes": "Feedback is critical: without it, effectiveness stays at 0.5 (default) and matching never improves.",
     }
 
 

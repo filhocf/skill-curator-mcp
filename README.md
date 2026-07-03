@@ -134,6 +134,55 @@ archived → active (skill_promote)
 2. GitHub search: `topic:claude-code-skills` OR `topic:agent-skills`
 3. Anthropic official: github.com/anthropics/skills
 
+## Integration Cycle
+
+The complete agent integration follows 5 steps across the session lifecycle:
+
+```
+┌─ Session Start ─────────────────────────────┐
+│  1. skill_reindex()                         │
+│     Rescan skills dir, update embeddings    │
+├─ Each Task ─────────────────────────────────┤
+│  2. skill_match(task="user request")        │
+│     → score > 0.5? Read and follow skill    │
+│     → score < 0.5? Proceed without skill    │
+│                                             │
+│  3. skill_feedback(name, outcome)           │
+│     Record "success", "partial", "failure"  │
+│     Updates effectiveness via EMA (α=0.3)   │
+├─ Session End ───────────────────────────────┤
+│  4. skill_gaps()                            │
+│     Detect tasks that had no matching skill │
+├─ Weekly ────────────────────────────────────┤
+│  5. skill_lifecycle()                       │
+│     → promote candidates (eff > 0.7, 3+    │
+│        uses)                                │
+│     → archive stale (90d no use, eff <0.3) │
+└─────────────────────────────────────────────┘
+```
+
+### System Prompt Integration (recommended)
+
+Add to your agent's system prompt for automatic skill consultation:
+
+```markdown
+## Skills
+Before implementing any task, call `skill_match(task="summary")`.
+If score > 0.5: read the skill and follow it.
+After using a skill: `skill_feedback(name="skill-name", outcome="success|failure")`.
+```
+
+This creates a learning loop: feedback improves effectiveness scores, which improves future matching. Without feedback, scores stay at default (0.5).
+
+### Why This Matters
+
+| With feedback loop | Without |
+|-------------------|---------|
+| Effective skills rank higher over time | All skills scored equally |
+| Stale skills get archived automatically | Dead skills pollute index |
+| Gaps detected → new skills created | Same gaps repeated forever |
+| Agent improves with use | Static performance |
+
 ## Integration
 
 - **Transport**: StreamableHTTP on port 3204
