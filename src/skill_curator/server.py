@@ -25,7 +25,7 @@ _port = int(os.environ.get("SKILL_CURATOR_PORT", "3204"))
 _skills_dir = os.environ.get("SKILL_CURATOR_SKILLS_DIR", os.path.expanduser("~/.kiro/skills"))
 _db_dir = os.environ.get("SKILL_CURATOR_DB_DIR", os.path.expanduser("~/.local/share/skill-curator"))
 
-mcp = FastMCP("skill-curator", host="127.0.0.1", port=_port,
+mcp = FastMCP("skill-curator", host="127.0.0.1", port=_port, stateless_http=True,
               instructions="Skill lifecycle intelligence — semantic matching, feedback loop, gap detection, scout.")
 
 _start_time = time.time()
