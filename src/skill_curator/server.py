@@ -25,7 +25,7 @@ _port = int(os.environ.get("SKILL_CURATOR_PORT", "3204"))
 _skills_dir = os.environ.get("SKILL_CURATOR_SKILLS_DIR", os.path.expanduser("~/.kiro/skills"))
 _db_dir = os.environ.get("SKILL_CURATOR_DB_DIR", os.path.expanduser("~/.local/share/skill-curator"))
 
-mcp = FastMCP("skill-curator", host="127.0.0.1", port=_port, stateless_http=True,
+mcp = FastMCP("skill-curator", host="127.0.0.1", port=_port,
               instructions="Skill lifecycle intelligence — semantic matching, feedback loop, gap detection, scout.")
 
 _start_time = time.time()
@@ -124,8 +124,6 @@ def get_onboarding_guide() -> dict:
     return _get_onboarding_guide()
 
 
-
-
 @mcp.tool()
 def skill_evolve(name: str, correction: str, task_description: str = "", section: str | None = None, dry_run: bool = True) -> dict:
     """Evolve a skill by applying a correction. Versions the original, rewrites content, resets effectiveness."""
@@ -139,6 +137,8 @@ def skill_rollback(name: str, version: str | None = None) -> dict:
     """Rollback a skill to a previous version from .versions/ directory."""
     return _skill_rollback(name, version=version, db=_get_db(), skills_dir=_skills_dir, encoder=_get_encoder())
 
+
+# Keep decorator for backward compat (won't fire with manual ASGI, but costs nothing)
 @mcp.custom_route("/health", methods=["GET"])
 async def health_check(request):
     from starlette.responses import JSONResponse
@@ -165,8 +165,61 @@ async def health_check(request):
 
 
 def main():
-    """Run the MCP server."""
-    mcp.run(transport="streamable-http")
+    """Start skill-curator with StreamableHTTPSessionManager (stateless)."""
+    import uvicorn
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+    from starlette.responses import JSONResponse, Response
+    from . import __version__
+
+    # Extract low-level Server from FastMCP (preserves all @mcp.tool registrations)
+    server_instance = mcp._mcp_server
+    sm = StreamableHTTPSessionManager(app=server_instance, event_store=None, stateless=True)
+
+    _ctx = None
+
+    async def app(scope, receive, send):
+        nonlocal _ctx
+        if scope["type"] == "lifespan":
+            while True:
+                msg = await receive()
+                if msg["type"] == "lifespan.startup":
+                    _ctx = sm.run()
+                    await _ctx.__aenter__()
+                    await send({"type": "lifespan.startup.complete"})
+                elif msg["type"] == "lifespan.shutdown":
+                    if _ctx:
+                        await _ctx.__aexit__(None, None, None)
+                    await send({"type": "lifespan.shutdown.complete"})
+                    return
+        path = scope.get("path", "")
+        if path in ("/mcp", "/mcp/"):
+            await sm.handle_request(scope, receive, send)
+        elif path == "/health":
+            checks = {}
+            status = "healthy"
+            try:
+                dbi = _get_db()
+                dbi.conn.execute("SELECT 1")
+                count = dbi.conn.execute("SELECT count(*) FROM skills").fetchone()[0]
+                checks["db"] = {"status": "ok"}
+                checks["skills_indexed"] = count
+            except Exception as e:
+                checks["db"] = {"status": "error", "detail": str(e)}
+                status = "unhealthy"
+            checks["model_loaded"] = _encoder_instance is not None
+            health_data = {
+                "status": status,
+                "version": __version__,
+                "uptime_seconds": int(time.time() - _start_time),
+                "checks": checks,
+            }
+            resp = JSONResponse(health_data)
+            await resp(scope, receive, send)
+        else:
+            resp = Response("Not Found", status_code=404)
+            await resp(scope, receive, send)
+
+    uvicorn.run(app, host="127.0.0.1", port=_port, log_level="info")
 
 
 if __name__ == "__main__":
