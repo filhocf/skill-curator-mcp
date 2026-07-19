@@ -7,6 +7,7 @@ import time
 
 from mcp.server.fastmcp import FastMCP
 
+from skill_curator.scout import scout_ingest as _scout_ingest
 from skill_curator.tools import (
     get_onboarding_guide as _get_onboarding_guide,
     skill_archive as _skill_archive,
@@ -82,11 +83,19 @@ def _get_encoder():
 
 @mcp.tool()
 def skill_match(
-    task: str, profile: list[str] | None = None, top_k: int = 3, session_id: str | None = None
+    task: str,
+    profile: list[str] | None = None,
+    top_k: int = 3,
+    session_id: str | None = None,
 ) -> list[dict]:
     """Match skills to a task description using semantic similarity."""
     return _skill_match(
-        task, db=_get_db(), encoder=_get_encoder(), profile=profile, top_k=top_k, session_id=session_id
+        task,
+        db=_get_db(),
+        encoder=_get_encoder(),
+        profile=profile,
+        top_k=top_k,
+        session_id=session_id,
     )
 
 
@@ -105,9 +114,13 @@ def skill_feedback(
 
 
 @mcp.tool()
-def skill_gaps(session_id: str | None = None, correlate: bool = False) -> list[dict] | dict:
+def skill_gaps(
+    session_id: str | None = None, correlate: bool = False
+) -> list[dict] | dict:
     """Detect skill gaps — skills with gap_count > 0 or no recent use."""
-    return _skill_gaps(db=_get_db(), session_id=session_id, correlate=correlate, encoder=_get_encoder())
+    return _skill_gaps(
+        db=_get_db(), session_id=session_id, correlate=correlate, encoder=_get_encoder()
+    )
 
 
 @mcp.tool()
@@ -182,6 +195,18 @@ def skill_rollback(name: str, version: str | None = None) -> dict:
         db=_get_db(),
         skills_dir=_skills_dir,
         encoder=_get_encoder(),
+    )
+
+
+@mcp.tool()
+def skill_scout_ingest(source_url: str, target_skill: str | None = None) -> dict:
+    """Fetch external skill repo, compare with local skill, propose evolution."""
+    return _scout_ingest(
+        source_url=source_url,
+        target_skill=target_skill,
+        db=_get_db(),
+        encoder=_get_encoder(),
+        skills_dir=_skills_dir,
     )
 
 

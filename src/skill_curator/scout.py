@@ -286,3 +286,160 @@ def _save_scouted_skill(db: Database, skill: dict) -> None:
         ),
     )
     db.conn.commit()
+
+
+# === scout_ingest — fetch external repo and propose evolution ===
+
+
+def scout_ingest(
+    source_url: str,
+    target_skill: str | None = None,
+    *,
+    db: Database,
+    encoder: Any,
+    skills_dir: str,
+) -> dict:
+    """Fetch external skill repo, compare with local, propose evolution."""
+    import base64
+    import re
+    from pathlib import Path
+
+    # Parse owner/repo from URL
+    match = re.match(r"https?://github\.com/([^/]+)/([^/]+)", source_url)
+    if not match:
+        return {"error": f"Invalid GitHub URL: {source_url}"}
+    owner, repo = match.groups()
+    repo = repo.rstrip("/")
+
+    # Fetch README
+    try:
+        resp = httpx.get(
+            f"https://api.github.com/repos/{owner}/{repo}/readme", timeout=10.0
+        )
+        resp.raise_for_status()
+        readme_content = base64.b64decode(resp.json().get("content", "")).decode(
+            "utf-8"
+        )
+    except Exception as e:
+        return {"error": f"Failed to fetch README: {e}"}
+
+    # Fetch skill files (look in skills/ or root *.md)
+    external_skills: list[dict] = []
+    try:
+        resp = httpx.get(
+            f"https://api.github.com/repos/{owner}/{repo}/contents/skills", timeout=10.0
+        )
+        if resp.status_code == 200:
+            for item in resp.json():
+                if item["name"].endswith(".md") and item["type"] == "file":
+                    file_resp = httpx.get(item["download_url"], timeout=10.0)
+                    if file_resp.status_code == 200:
+                        external_skills.append(
+                            {"name": item["name"], "content": file_resp.text}
+                        )
+                        if len(external_skills) >= 5:  # limit
+                            break
+    except Exception:
+        pass  # skills/ dir might not exist
+
+    # If no skills/ dir, use README as the main content
+    if not external_skills:
+        external_skills = [{"name": "README.md", "content": readme_content}]
+
+    # Combine all external content
+    combined_external = (
+        readme_content + "\n\n" + "\n\n".join(s["content"] for s in external_skills)
+    )
+
+    # Find closest local skill
+    if not target_skill:
+        # Use README first line as query
+        query = readme_content.split("\n")[0][:200]
+        results = db.search_similar(encoder.encode(query), limit=3)
+        if results:
+            target_skill = results[0][0]  # closest by embedding
+        else:
+            return {"error": "No local skills found to compare against."}
+
+    # Load local skill
+    skill = db.get_skill(target_skill)
+    if not skill:
+        return {"error": f"Local skill '{target_skill}' not found."}
+
+    local_path = Path(skill.path)
+    if not local_path.exists():
+        return {"error": f"Local skill file not found: {local_path}"}
+    local_content = local_path.read_text(encoding="utf-8")
+
+    # Compare sections (H2/H3 headers)
+    local_sections = _extract_sections(local_content)
+    external_sections = _extract_sections(combined_external)
+
+    # Find gaps: sections in external not in local
+    gaps: list[dict] = []
+    for heading, content in external_sections.items():
+        # Check if local has similar section (fuzzy match on heading)
+        has_similar = any(
+            _section_similarity(heading, local_h) > 0.7
+            for local_h in local_sections.keys()
+        )
+        if not has_similar and len(content.strip()) > 50:  # non-trivial content
+            gaps.append(
+                {"heading": heading, "content": content[:500], "source": source_url}
+            )
+
+    # Generate proposal
+    proposal_lines: list[str] = []
+    for gap in gaps[:10]:  # max 10 sections
+        proposal_lines.append(f"### {gap['heading']}\n")
+        proposal_lines.append(gap["content"])
+        proposal_lines.append("")
+
+    adapted_content = "\n".join(proposal_lines) if proposal_lines else ""
+
+    return {
+        "target_skill": target_skill,
+        "source": source_url,
+        "external_skills_found": len(external_skills),
+        "gaps_found": len(gaps),
+        "sections_to_add": [g["heading"] for g in gaps],
+        "adapted_content": adapted_content,
+        "local_sections": list(local_sections.keys()),
+        "external_sections": list(external_sections.keys()),
+        "apply_with": f"skill_evolve(name='{target_skill}', correction=<paste adapted_content>, dry_run=True)",
+    }
+
+
+def _extract_sections(content: str) -> dict:
+    """Extract H2/H3 sections from markdown."""
+    import re
+
+    sections: dict[str, str] = {}
+    current_heading: str | None = None
+    current_content: list[str] = []
+
+    for line in content.split("\n"):
+        m = re.match(r"^(#{2,3})\s+(.+)", line)
+        if m:
+            if current_heading:
+                sections[current_heading] = "\n".join(current_content)
+            current_heading = m.group(2).strip()
+            current_content = []
+        else:
+            current_content.append(line)
+
+    if current_heading:
+        sections[current_heading] = "\n".join(current_content)
+
+    return sections
+
+
+def _section_similarity(a: str, b: str) -> float:
+    """Simple word overlap similarity for section headings (Jaccard)."""
+    words_a = set(a.lower().split())
+    words_b = set(b.lower().split())
+    if not words_a or not words_b:
+        return 0.0
+    intersection = words_a & words_b
+    union = words_a | words_b
+    return len(intersection) / len(union)

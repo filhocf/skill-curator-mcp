@@ -475,3 +475,188 @@ class TestScoutMultiSource:
         assert mock_httpx["n"] <= 10, (
             f"Made {mock_httpx['n']} HTTP requests, max allowed is 10"
         )
+
+
+# === TestScoutIngest — RFC-SC-06 ===
+
+
+class TestScoutIngest:
+    """Tests for scout_ingest: fetch external repo, compare, propose evolution."""
+
+    MOCK_README = (
+        "# Awesome Deploy Skills\n\n"
+        "## Installation\n\n"
+        "Run pip install awesome-deploy to get started with deployment automation.\n"
+        "This package provides a set of curated deployment skills.\n\n"
+        "## Configuration\n\n"
+        "Set the following environment variables before using:\n"
+        "- DEPLOY_TARGET: The target environment (dev, staging, prod)\n"
+        "- DEPLOY_TIMEOUT: Timeout in seconds for deployment operations\n\n"
+        "## Rollback Procedures\n\n"
+        "When a deployment fails, follow these rollback steps:\n"
+        "1. Identify the failed component\n"
+        "2. Run the rollback command for that component\n"
+        "3. Verify system health after rollback\n"
+    )
+
+    LOCAL_SKILL_CONTENT = (
+        "# Deploy Skill\n\n"
+        "## Installation\n\n"
+        "Use pip install deploy-tool for local deployment.\n"
+        "Basic setup for deploying applications.\n\n"
+    )
+
+    @pytest.fixture
+    def mock_encoder(self):
+        """Minimal encoder mock that returns a fixed-size vector."""
+        enc = MagicMock()
+        enc.encode.return_value = [0.1] * 384
+        return enc
+
+    @pytest.fixture
+    def db_with_skill(self, tmp_path, db: Database, mock_encoder):
+        """DB with a local skill indexed and file on disk."""
+        skill_file = tmp_path / "deploy.md"
+        skill_file.write_text(self.LOCAL_SKILL_CONTENT, encoding="utf-8")
+        db.upsert_skill(
+            Skill(
+                name="deploy",
+                path=str(skill_file),
+                description="Deploy applications",
+            )
+        )
+        db.save_embedding("deploy", [0.1] * 384)
+        return db
+
+    def _mock_httpx_get(self, monkeypatch):
+        """Set up httpx.get mock returning README with 3 H2 sections."""
+        import base64
+
+        readme_b64 = base64.b64encode(self.MOCK_README.encode()).decode()
+
+        def mock_get(url, **kwargs):
+            resp = MagicMock()
+            if "/readme" in url:
+                resp.status_code = 200
+                resp.json.return_value = {"content": readme_b64, "encoding": "base64"}
+                resp.raise_for_status = MagicMock()
+            elif "/contents/skills" in url:
+                resp.status_code = 404
+                resp.json.return_value = {"message": "Not Found"}
+            else:
+                resp.status_code = 404
+            return resp
+
+        monkeypatch.setattr("skill_curator.scout.httpx.get", mock_get)
+
+    def test_invalid_url_returns_error(self, db: Database, mock_encoder):
+        """Non-GitHub URL returns error dict."""
+        from skill_curator.scout import scout_ingest
+
+        result = scout_ingest(
+            source_url="https://gitlab.com/user/repo",
+            db=db,
+            encoder=mock_encoder,
+            skills_dir="/tmp",
+        )
+        assert "error" in result
+        assert "Invalid GitHub URL" in result["error"]
+
+    def test_returns_target_skill(
+        self, monkeypatch, tmp_path, db_with_skill, mock_encoder
+    ):
+        """Result has 'target_skill' key."""
+        from skill_curator.scout import scout_ingest
+
+        self._mock_httpx_get(monkeypatch)
+        result = scout_ingest(
+            source_url="https://github.com/user/awesome-deploy",
+            target_skill="deploy",
+            db=db_with_skill,
+            encoder=mock_encoder,
+            skills_dir=str(tmp_path),
+        )
+        assert "target_skill" in result
+        assert result["target_skill"] == "deploy"
+
+    def test_returns_gaps_found(
+        self, monkeypatch, tmp_path, db_with_skill, mock_encoder
+    ):
+        """Result has 'gaps_found' as an int."""
+        from skill_curator.scout import scout_ingest
+
+        self._mock_httpx_get(monkeypatch)
+        result = scout_ingest(
+            source_url="https://github.com/user/awesome-deploy",
+            target_skill="deploy",
+            db=db_with_skill,
+            encoder=mock_encoder,
+            skills_dir=str(tmp_path),
+        )
+        assert "gaps_found" in result
+        assert isinstance(result["gaps_found"], int)
+        # External has 3 sections (Installation, Configuration, Rollback Procedures)
+        # Local has 1 section (Installation) — expect 2 gaps
+        assert result["gaps_found"] == 2
+
+    def test_returns_sections_to_add(
+        self, monkeypatch, tmp_path, db_with_skill, mock_encoder
+    ):
+        """Result has 'sections_to_add' as a list."""
+        from skill_curator.scout import scout_ingest
+
+        self._mock_httpx_get(monkeypatch)
+        result = scout_ingest(
+            source_url="https://github.com/user/awesome-deploy",
+            target_skill="deploy",
+            db=db_with_skill,
+            encoder=mock_encoder,
+            skills_dir=str(tmp_path),
+        )
+        assert "sections_to_add" in result
+        assert isinstance(result["sections_to_add"], list)
+        assert "Configuration" in result["sections_to_add"]
+        assert "Rollback Procedures" in result["sections_to_add"]
+
+    def test_returns_adapted_content(
+        self, monkeypatch, tmp_path, db_with_skill, mock_encoder
+    ):
+        """Result has 'adapted_content' as a string."""
+        from skill_curator.scout import scout_ingest
+
+        self._mock_httpx_get(monkeypatch)
+        result = scout_ingest(
+            source_url="https://github.com/user/awesome-deploy",
+            target_skill="deploy",
+            db=db_with_skill,
+            encoder=mock_encoder,
+            skills_dir=str(tmp_path),
+        )
+        assert "adapted_content" in result
+        assert isinstance(result["adapted_content"], str)
+        assert len(result["adapted_content"]) > 0
+
+    def test_never_modifies_files(
+        self, monkeypatch, tmp_path, db_with_skill, mock_encoder
+    ):
+        """Skill file on disk is unchanged after scout_ingest call."""
+        from skill_curator.scout import scout_ingest
+
+        self._mock_httpx_get(monkeypatch)
+        # Read original content
+        skill = db_with_skill.get_skill("deploy")
+        from pathlib import Path
+
+        original_content = Path(skill.path).read_text(encoding="utf-8")
+
+        scout_ingest(
+            source_url="https://github.com/user/awesome-deploy",
+            target_skill="deploy",
+            db=db_with_skill,
+            encoder=mock_encoder,
+            skills_dir=str(tmp_path),
+        )
+
+        # Verify file unchanged
+        after_content = Path(skill.path).read_text(encoding="utf-8")
+        assert after_content == original_content

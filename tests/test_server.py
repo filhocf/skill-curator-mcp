@@ -9,7 +9,9 @@ class TestServerSetup:
 
     def test_tools_registered(self) -> None:
         tools = mcp.list_tools()
-        assert len(tools) == 12  # 10 original + skill_evolve + skill_rollback
+        assert (
+            len(tools) == 13
+        )  # 10 original + skill_evolve + skill_rollback + skill_scout_ingest
 
     def test_instructions_not_none(self) -> None:
         assert mcp.instructions is not None
