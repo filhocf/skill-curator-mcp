@@ -23,9 +23,9 @@ Adicionar ao skill-curator-mcp:
 @mcp.tool()
 def steering_audit(steerings_dir: str | None = None) -> dict:
     """Audit steering files for size, redundancy, and staleness.
-    
+
     Returns:
-        Dict with: total_count, always_count, estimated_tokens, 
+        Dict with: total_count, always_count, estimated_tokens,
         overlaps (pairs with cosine >0.85), inflated (>100 lines),
         stale (>60 days without edit), alerts (list of actionable warnings).
     """
@@ -81,7 +81,7 @@ class SteeringFile:
     last_modified: float  # epoch
 
 
-@dataclass  
+@dataclass
 class SteeringHealthReport:
     total_count: int
     always_count: int
@@ -142,7 +142,7 @@ test_steering_audit.py:
 - test_token_estimation — chars/4 com tolerância ±10%
 - test_overlap_detection — 2 arquivos similares → cosine >0.85
 - test_inflated_detection — arquivo >100 linhas → flagged
-- test_stale_detection — mtime >60 dias → flagged  
+- test_stale_detection — mtime >60 dias → flagged
 - test_health_grading — warning vs critical thresholds
 - test_empty_dir — retorna counts zero, health ok
 ```

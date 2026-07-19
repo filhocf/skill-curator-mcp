@@ -75,16 +75,16 @@ async def skill_gaps(
     session_id: str | None = None
 ) -> dict:
     """Detect skill gaps — enhanced with correlation."""
-    
+
     result = {"known_gaps": [...]}  # current behavior
-    
+
     if correlate:
         # 1. Fetch gap_log entries
         entries = db.get_gap_log(session_id=session_id)
-        
+
         # 2. Cluster by semantic similarity
         clusters = cluster_by_similarity(entries, threshold=0.8)
-        
+
         # 3. Flag actionable patterns (>=3 occurrences)
         patterns = []
         for cluster in clusters:
@@ -99,10 +99,10 @@ async def skill_gaps(
                     "recommended_action": determine_action(cluster),
                     "actionable": True
                 })
-        
+
         result["detected_patterns"] = patterns
         result["recommendations"] = generate_recommendations(patterns)
-    
+
     return result
 ```
 
