@@ -147,9 +147,9 @@ def skill_audit(skills_dir: str | None = None) -> list[dict]:
 
 
 @mcp.tool()
-def get_onboarding_guide() -> dict:
+def get_onboarding_guide(verbosity: str = "full") -> dict:
     """Get integration guide for using the skill-curator MCP."""
-    return _get_onboarding_guide()
+    return _get_onboarding_guide(verbosity=verbosity)
 
 
 @mcp.tool()

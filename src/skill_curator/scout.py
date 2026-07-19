@@ -46,12 +46,6 @@ def scout_skills(
     sources = sources or _DEFAULT_SOURCES
     warnings: list[str] = []
 
-    # Check scout_cache first (new cache layer)
-    if db and query and _has_scout_cache_table(db):
-        cached = _get_scout_cache(db, query)
-        if cached is not None:
-            return {"skills": cached, "message": f"Found {len(cached)} skills (cached)"}
-
     # Legacy rate limit: return cached from scouted_skills if scouted in last 24h
     if db and not _has_scout_cache_table(db):
         cached = _get_cached_legacy(db)
@@ -60,7 +54,10 @@ def scout_skills(
 
     # Also check legacy cache when scout_cache table exists but has no hit
     # (for backward compat with old tests that insert into scouted_skills directly)
-    if db and _has_scout_cache_table(db) and not gaps_only:
+    if db and _has_scout_cache_table(db) and not gaps_only and query:
+        cached = _get_scout_cache(db, query)
+        if cached is not None:
+            return {"skills": cached, "message": f"Found {len(cached)} skills (cached)"}
         cached = _get_cached_legacy(db)
         if cached is not None:
             return {"skills": cached, "message": f"Found {len(cached)} skills (cached)"}
@@ -91,7 +88,8 @@ def scout_skills(
     if not queries:
         return {"skills": [], "message": "No queries to scout."}
 
-    # Fetch from sources
+    # Fetch from sources (per-query cache check inside loop)
+    has_cache_table = db and _has_scout_cache_table(db)
     all_skills: list[dict] = []
     request_count = 0
 
@@ -100,6 +98,14 @@ def scout_skills(
             warnings.append(f"Max requests ({_MAX_REQUESTS}) reached, stopping.")
             break
 
+        # Per-query cache check
+        if has_cache_table:
+            cached = _get_scout_cache(db, q)
+            if cached is not None:
+                all_skills.extend(cached)
+                continue
+
+        query_results: list[dict] = []
         for source_name in sources:
             if request_count >= _MAX_REQUESTS:
                 break
@@ -110,10 +116,16 @@ def scout_skills(
                     r["source"] = source_name
                     if "relevance_score" not in r:
                         r["relevance_score"] = 0.5
-                all_skills.extend(results)
+                query_results.extend(results)
             except Exception as e:
                 request_count += 1
                 warnings.append(f"Source '{source_name}' failed: {str(e)}")
+
+        all_skills.extend(query_results)
+
+        # Per-query cache save
+        if has_cache_table and query_results:
+            _save_scout_cache(db, q, query_results)
 
     # Filter: repos without README are excluded
     all_skills = [s for s in all_skills if s.get("_has_readme", True)]
@@ -126,10 +138,6 @@ def scout_skills(
         for skill in all_skills:
             if not _scouted_skill_exists(db, skill.get("source_url", "")):
                 _save_scouted_skill(db, skill)
-
-    # Save to scout_cache (new)
-    if db and _has_scout_cache_table(db) and all_skills and query:
-        _save_scout_cache(db, query, all_skills)
 
     result: dict = {"skills": all_skills, "message": f"Found {len(all_skills)} skills"}
     if warnings:
@@ -155,7 +163,9 @@ def _fetch_github(query: str) -> list[dict]:
     """Search GitHub for skill repositories."""
     resp = httpx.get(
         "https://api.github.com/search/repositories",
-        params={"q": f"{query} topic:claude-code-skills OR topic:agent-skills"},
+        params={
+            "q": f"{query} (topic:claude-code-skills OR topic:agent-skills OR topic:mcp-skills)"
+        },
         timeout=10.0,
     )
     resp.raise_for_status()
@@ -181,7 +191,7 @@ def _fetch_web(query: str) -> list[dict]:
 def _repo_to_skill(repo: dict) -> dict:
     """Convert a GitHub repo to a scouted skill dict."""
     desc = repo.get("description", "")
-    has_readme = repo.get("has_readme", False)
+    has_readme = repo.get("has_readme", True)
     return {
         "name": repo["full_name"].split("/")[-1],
         "source_url": repo["html_url"],

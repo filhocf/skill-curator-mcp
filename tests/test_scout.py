@@ -60,8 +60,8 @@ def _make_repo(name: str, url: str, description: str, has_readme: bool = True) -
         "topics": ["claude-code-skills"],
         "stargazers_count": 10,
     }
-    if has_readme:
-        repo["has_readme"] = True
+    if has_readme is not None:
+        repo["has_readme"] = has_readme
     return repo
 
 

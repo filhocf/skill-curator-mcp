@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -9,7 +10,10 @@ from typing import Any
 from skill_curator.db import Database
 from skill_curator.indexer import reindex_all
 from skill_curator.models import FeedbackEntry, LifecycleState
-from skill_curator.scoring import composite_score
+from skill_curator.scoring import (
+    composite_score,
+    cosine_similarity as _cosine_similarity,
+)
 
 _EMA_ALPHA = 0.3
 _OUTCOME_VALUES = {"success": 1.0, "partial": 0.5, "failure": 0.0}
@@ -55,7 +59,7 @@ def skill_match(
 
     if best_score < LOW_THRESHOLD:
         # Gap detected
-        suggested_name = task.lower().replace(" ", "-")[:50]
+        suggested_name = re.sub(r"[^a-z0-9]+", "-", task.lower()).strip("-")[:50]
         suggestion = {
             "gap_detected": True,
             "improvement_opportunity": False,
@@ -167,7 +171,9 @@ def skill_gaps(
         return known_gaps  # backward compatible
 
     # Correlation: cluster gap_log entries by semantic similarity
-    entries = db.get_gap_log(session_id=session_id)
+    entries = [
+        e for e in db.get_gap_log(session_id=session_id) if not e.get("resolved", 0)
+    ]
     detected_patterns = []
 
     if entries and encoder is not None:
@@ -216,8 +222,13 @@ def _cluster_gap_entries(
     if not entries:
         return []
 
-    # Generate embeddings for all entries
-    embeddings = [encoder.encode(e["task_description"]) for e in entries]
+    # Generate embeddings for all entries (batch)
+    texts = [e["task_description"] for e in entries]
+    try:
+        embeddings = encoder.encode(texts)
+    except (TypeError, AttributeError):
+        # Fallback for encoders that only accept single strings
+        embeddings = [encoder.encode(t) for t in texts]
 
     # Greedy clustering: assign each entry to first cluster with similarity >= threshold
     clusters: list[list[int]] = []  # list of lists of indices
@@ -237,18 +248,6 @@ def _cluster_gap_entries(
 
     # Convert indices back to entries
     return [[entries[i] for i in cluster] for cluster in clusters]
-
-
-def _cosine_similarity(a: list[float], b: list[float]) -> float:
-    """Compute cosine similarity between two vectors."""
-    import math
-
-    dot = sum(x * y for x, y in zip(a, b))
-    norm_a = math.sqrt(sum(x * x for x in a))
-    norm_b = math.sqrt(sum(x * x for x in b))
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-    return dot / (norm_a * norm_b)
 
 
 def skill_lifecycle(*, db: Database) -> dict:
