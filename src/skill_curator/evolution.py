@@ -1,4 +1,5 @@
 """Skill evolution — auto-correction loop for skills."""
+
 from __future__ import annotations
 
 import re
@@ -46,7 +47,9 @@ def check_evolve_eligibility(
     return None
 
 
-def apply_evolution(skill_path: Path, correction: str, section: str | None = None) -> tuple[str, str]:
+def apply_evolution(
+    skill_path: Path, correction: str, section: str | None = None
+) -> tuple[str, str]:
     """Apply correction to a skill file.
 
     If section is specified, replaces that section's content.
@@ -64,10 +67,18 @@ def apply_evolution(skill_path: Path, correction: str, section: str | None = Non
             raise ValueError(f"Section '## {section}' not found in {skill_path.name}")
 
         header = match.group(1)
-        new_content = original[: match.start()] + header + correction.strip() + "\n" + original[match.end() :]
+        new_content = (
+            original[: match.start()]
+            + header
+            + correction.strip()
+            + "\n"
+            + original[match.end() :]
+        )
     else:
         # Append correction as update note
-        new_content = original.rstrip() + "\n\n## Corrections\n\n" + correction.strip() + "\n"
+        new_content = (
+            original.rstrip() + "\n\n## Corrections\n\n" + correction.strip() + "\n"
+        )
 
     return original, new_content
 

@@ -1,4 +1,5 @@
 """Tests for skill_curator.db — SQLite storage layer."""
+
 from datetime import datetime, timedelta
 
 import pytest
@@ -15,7 +16,11 @@ def db() -> Database:
 
 @pytest.fixture
 def sample_skill() -> Skill:
-    return Skill(name="python-rest", path="/skills/python-rest.md", description="REST APIs in Python")
+    return Skill(
+        name="python-rest",
+        path="/skills/python-rest.md",
+        description="REST APIs in Python",
+    )
 
 
 class TestDatabaseInit:
@@ -51,7 +56,9 @@ class TestSkillCRUD:
 class TestFeedback:
     def test_add_feedback_and_retrieve(self, db: Database, sample_skill: Skill) -> None:
         db.upsert_skill(sample_skill)
-        entry = FeedbackEntry(skill_name="python-rest", outcome="success", task_description="build API")
+        entry = FeedbackEntry(
+            skill_name="python-rest", outcome="success", task_description="build API"
+        )
         db.add_feedback(entry)
         feedbacks = db.get_feedback("python-rest")
         assert len(feedbacks) == 1

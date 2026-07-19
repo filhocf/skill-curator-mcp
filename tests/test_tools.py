@@ -1,6 +1,6 @@
 """Tests for skill_curator.tools — MCP tool functions (phase 0.2.0 RED)."""
+
 from datetime import datetime, timedelta
-from pathlib import Path
 
 import pytest
 
@@ -47,15 +47,40 @@ def db_with_skills(db: Database) -> Database:
     """DB with 4 skills + embeddings for tool tests."""
     encoder = MockEncoder()
     skills = [
-        Skill(name="python-rest", path="/skills/python-rest.md", description="Build REST APIs in Python",
-              effectiveness=0.8, total_uses=5, state=LifecycleState.ACTIVE, profile_tags='["backend"]'),
-        Skill(name="testing", path="/skills/testing.md", description="Unit testing patterns",
-              effectiveness=0.6, total_uses=2, state=LifecycleState.ACTIVE),
-        Skill(name="old-skill", path="/skills/old.md", description="Legacy patterns",
-              effectiveness=0.2, total_uses=10, state=LifecycleState.STALE,
-              last_used_at=(datetime.utcnow() - timedelta(days=95)).isoformat()),
-        Skill(name="archived-skill", path="/skills/archived.md", description="Deprecated tool",
-              effectiveness=0.1, total_uses=1, state=LifecycleState.ARCHIVED),
+        Skill(
+            name="python-rest",
+            path="/skills/python-rest.md",
+            description="Build REST APIs in Python",
+            effectiveness=0.8,
+            total_uses=5,
+            state=LifecycleState.ACTIVE,
+            profile_tags='["backend"]',
+        ),
+        Skill(
+            name="testing",
+            path="/skills/testing.md",
+            description="Unit testing patterns",
+            effectiveness=0.6,
+            total_uses=2,
+            state=LifecycleState.ACTIVE,
+        ),
+        Skill(
+            name="old-skill",
+            path="/skills/old.md",
+            description="Legacy patterns",
+            effectiveness=0.2,
+            total_uses=10,
+            state=LifecycleState.STALE,
+            last_used_at=(datetime.utcnow() - timedelta(days=95)).isoformat(),
+        ),
+        Skill(
+            name="archived-skill",
+            path="/skills/archived.md",
+            description="Deprecated tool",
+            effectiveness=0.1,
+            total_uses=1,
+            state=LifecycleState.ARCHIVED,
+        ),
     ]
     for s in skills:
         db.upsert_skill(s)
@@ -68,8 +93,12 @@ def db_with_skills(db: Database) -> Database:
 
 
 class TestSkillMatch:
-    def test_returns_top_k_ordered_by_score_desc(self, db_with_skills: Database) -> None:
-        results = skill_match("build an API", db=db_with_skills, encoder=MockEncoder(), top_k=2)
+    def test_returns_top_k_ordered_by_score_desc(
+        self, db_with_skills: Database
+    ) -> None:
+        results = skill_match(
+            "build an API", db=db_with_skills, encoder=MockEncoder(), top_k=2
+        )
         assert len(results) <= 2
         scores = [r["score"] for r in results]
         assert scores == sorted(scores, reverse=True)
@@ -79,23 +108,41 @@ class TestSkillMatch:
         assert results == []
 
     def test_excludes_archived_skills(self, db_with_skills: Database) -> None:
-        results = skill_match("deprecated tool", db=db_with_skills, encoder=MockEncoder(), top_k=10)
+        results = skill_match(
+            "deprecated tool", db=db_with_skills, encoder=MockEncoder(), top_k=10
+        )
         names = [r["name"] for r in results]
         assert "archived-skill" not in names
 
     def test_profile_boost_increases_score(self, db_with_skills: Database) -> None:
-        without_profile = skill_match("REST API", db=db_with_skills, encoder=MockEncoder(), top_k=5)
-        with_profile = skill_match("REST API", db=db_with_skills, encoder=MockEncoder(),
-                                   top_k=5, profile=["python-rest"])
-        score_without = next(r["score"] for r in without_profile if r["name"] == "python-rest")
-        score_with = next(r["score"] for r in with_profile if r["name"] == "python-rest")
+        without_profile = skill_match(
+            "REST API", db=db_with_skills, encoder=MockEncoder(), top_k=5
+        )
+        with_profile = skill_match(
+            "REST API",
+            db=db_with_skills,
+            encoder=MockEncoder(),
+            top_k=5,
+            profile=["python-rest"],
+        )
+        score_without = next(
+            r["score"] for r in without_profile if r["name"] == "python-rest"
+        )
+        score_with = next(
+            r["score"] for r in with_profile if r["name"] == "python-rest"
+        )
         assert score_with > score_without
 
     def test_semantically_relevant_score_above_threshold(self, db: Database) -> None:
         """When encoder returns similar vectors, score should be > 0.5."""
         encoder = DifferentiatingEncoder()
-        skill = Skill(name="python-rest", path="/s/p.md", description="Python REST APIs",
-                      effectiveness=0.7, state=LifecycleState.ACTIVE)
+        skill = Skill(
+            name="python-rest",
+            path="/s/p.md",
+            description="Python REST APIs",
+            effectiveness=0.7,
+            state=LifecycleState.ACTIVE,
+        )
         db.upsert_skill(skill)
         db.save_embedding("python-rest", encoder.encode("Python REST APIs"))
         results = skill_match("python rest endpoint", db=db, encoder=encoder, top_k=3)
@@ -107,25 +154,41 @@ class TestSkillMatch:
 
 
 class TestSkillFeedback:
-    def test_saves_feedback_and_updates_effectiveness_ema(self, db_with_skills: Database) -> None:
+    def test_saves_feedback_and_updates_effectiveness_ema(
+        self, db_with_skills: Database
+    ) -> None:
         old_eff = db_with_skills.get_skill("python-rest").effectiveness  # 0.8
-        result = skill_feedback("python-rest", outcome="success", task_description="built API",
-                                db=db_with_skills)
+        skill_feedback(
+            "python-rest",
+            outcome="success",
+            task_description="built API",
+            db=db_with_skills,
+        )
         new_eff = db_with_skills.get_skill("python-rest").effectiveness
         expected = 0.3 * 1.0 + 0.7 * old_eff  # EMA α=0.3
         assert new_eff == pytest.approx(expected, abs=1e-6)
 
     def test_increments_total_uses(self, db_with_skills: Database) -> None:
         old_uses = db_with_skills.get_skill("testing").total_uses
-        skill_feedback("testing", outcome="success", task_description="wrote tests",
-                       db=db_with_skills)
+        skill_feedback(
+            "testing",
+            outcome="success",
+            task_description="wrote tests",
+            db=db_with_skills,
+        )
         new_uses = db_with_skills.get_skill("testing").total_uses
         assert new_uses == old_uses + 1
 
-    @pytest.mark.parametrize("outcome,direction", [("success", "up"), ("failure", "down")])
-    def test_effectiveness_direction(self, db_with_skills: Database, outcome: str, direction: str) -> None:
+    @pytest.mark.parametrize(
+        "outcome,direction", [("success", "up"), ("failure", "down")]
+    )
+    def test_effectiveness_direction(
+        self, db_with_skills: Database, outcome: str, direction: str
+    ) -> None:
         old_eff = db_with_skills.get_skill("testing").effectiveness  # 0.6
-        skill_feedback("testing", outcome=outcome, task_description="task", db=db_with_skills)
+        skill_feedback(
+            "testing", outcome=outcome, task_description="task", db=db_with_skills
+        )
         new_eff = db_with_skills.get_skill("testing").effectiveness
         if direction == "up":
             assert new_eff > old_eff
@@ -133,7 +196,9 @@ class TestSkillFeedback:
             assert new_eff < old_eff
 
     def test_nonexistent_skill_returns_error(self, db: Database) -> None:
-        result = skill_feedback("nonexistent", outcome="success", task_description="x", db=db)
+        result = skill_feedback(
+            "nonexistent", outcome="success", task_description="x", db=db
+        )
         assert result.get("error") is not None
 
 
@@ -142,8 +207,12 @@ class TestSkillFeedback:
 
 class TestSkillGaps:
     def test_returns_skills_with_gap_count_gt_zero(self, db: Database) -> None:
-        db.upsert_skill(Skill(name="gapped", path="/g.md", gap_count=3, state=LifecycleState.ACTIVE))
-        db.upsert_skill(Skill(name="ok", path="/ok.md", gap_count=0, state=LifecycleState.ACTIVE))
+        db.upsert_skill(
+            Skill(name="gapped", path="/g.md", gap_count=3, state=LifecycleState.ACTIVE)
+        )
+        db.upsert_skill(
+            Skill(name="ok", path="/ok.md", gap_count=0, state=LifecycleState.ACTIVE)
+        )
         results = skill_gaps(db=db)
         names = [r["name"] for r in results]
         assert "gapped" in names
@@ -151,10 +220,22 @@ class TestSkillGaps:
 
     def test_returns_skills_without_recent_use(self, db: Database) -> None:
         old_date = (datetime.utcnow() - timedelta(days=45)).isoformat()
-        db.upsert_skill(Skill(name="stale-use", path="/s.md", last_used_at=old_date,
-                              state=LifecycleState.ACTIVE))
-        db.upsert_skill(Skill(name="recent", path="/r.md", last_used_at=datetime.utcnow().isoformat(),
-                              state=LifecycleState.ACTIVE))
+        db.upsert_skill(
+            Skill(
+                name="stale-use",
+                path="/s.md",
+                last_used_at=old_date,
+                state=LifecycleState.ACTIVE,
+            )
+        )
+        db.upsert_skill(
+            Skill(
+                name="recent",
+                path="/r.md",
+                last_used_at=datetime.utcnow().isoformat(),
+                state=LifecycleState.ACTIVE,
+            )
+        )
         results = skill_gaps(db=db)
         names = [r["name"] for r in results]
         assert "stale-use" in names
@@ -165,7 +246,9 @@ class TestSkillGaps:
 
 
 class TestSkillLifecycle:
-    def test_categorizes_active_stale_promote_archive(self, db_with_skills: Database) -> None:
+    def test_categorizes_active_stale_promote_archive(
+        self, db_with_skills: Database
+    ) -> None:
         result = skill_lifecycle(db=db_with_skills)
         assert "active" in result
         assert "stale" in result
@@ -173,23 +256,45 @@ class TestSkillLifecycle:
         assert "candidates_archive" in result
 
     def test_candidate_promote_high_effectiveness_and_uses(self, db: Database) -> None:
-        db.upsert_skill(Skill(name="star", path="/s.md", effectiveness=0.8, total_uses=5,
-                              state=LifecycleState.DRAFT))
+        db.upsert_skill(
+            Skill(
+                name="star",
+                path="/s.md",
+                effectiveness=0.8,
+                total_uses=5,
+                state=LifecycleState.DRAFT,
+            )
+        )
         result = skill_lifecycle(db=db)
         names = [s["name"] for s in result["candidates_promote"]]
         assert "star" in names
 
     def test_candidate_archive_low_effectiveness(self, db: Database) -> None:
-        db.upsert_skill(Skill(name="bad", path="/b.md", effectiveness=0.2, total_uses=10,
-                              state=LifecycleState.ACTIVE))
+        db.upsert_skill(
+            Skill(
+                name="bad",
+                path="/b.md",
+                effectiveness=0.2,
+                total_uses=10,
+                state=LifecycleState.ACTIVE,
+            )
+        )
         result = skill_lifecycle(db=db)
         names = [s["name"] for s in result["candidates_archive"]]
         assert "bad" in names
 
     def test_candidate_archive_stale_over_90d(self, db: Database) -> None:
         old = (datetime.utcnow() - timedelta(days=100)).isoformat()
-        db.upsert_skill(Skill(name="ancient", path="/a.md", effectiveness=0.5, total_uses=2,
-                              state=LifecycleState.STALE, last_used_at=old))
+        db.upsert_skill(
+            Skill(
+                name="ancient",
+                path="/a.md",
+                effectiveness=0.5,
+                total_uses=2,
+                state=LifecycleState.STALE,
+                last_used_at=old,
+            )
+        )
         result = skill_lifecycle(db=db)
         names = [s["name"] for s in result["candidates_archive"]]
         assert "ancient" in names
@@ -200,7 +305,7 @@ class TestSkillLifecycle:
 
 class TestSkillPromote:
     def test_changes_state_to_active(self, db_with_skills: Database) -> None:
-        result = skill_promote("old-skill", db=db_with_skills)
+        skill_promote("old-skill", db=db_with_skills)
         skill = db_with_skills.get_skill("old-skill")
         assert skill.state == LifecycleState.ACTIVE
 
@@ -211,7 +316,7 @@ class TestSkillPromote:
 
 class TestSkillArchive:
     def test_changes_state_to_archived(self, db_with_skills: Database) -> None:
-        result = skill_archive("testing", db=db_with_skills)
+        skill_archive("testing", db=db_with_skills)
         skill = db_with_skills.get_skill("testing")
         assert skill.state == LifecycleState.ARCHIVED
 
@@ -246,227 +351,632 @@ class TestSkillScout:
         assert "message" in result or "stub" in str(result).lower()
 
 
-# === get_onboarding_guide ===
+# === get_onboarding_guide (SC-05 RED) ===
 
 
-class TestGetOnboardingGuide:
-    def test_returns_expected_keys(self) -> None:
-        result = get_onboarding_guide()
-        assert "quick_start" in result
-        assert "tools" in result
-        assert "protocol" in result
-        assert "scoring" in result
-        assert "notes" in result
+class TestOnboardingGuide:
+    """Tests for enhanced get_onboarding_guide(verbosity) — SC-05 RED."""
 
-    def test_tools_has_nine_entries(self) -> None:
-        result = get_onboarding_guide()
-        assert len(result["tools"]) == 9
-
-
-# === skill_evolve ===
-
-
-class TestSkillEvolve:
-    """Integration tests for skill_evolve tool function."""
-
-    @pytest.fixture
-    def skill_env(self, tmp_path: Path, db: Database) -> tuple[Database, Path, Path]:
-        """Set up a skill file + DB entry + failures for evolution."""
-        from skill_curator.models import Skill, LifecycleState
-
-        skills_dir = tmp_path / "skills"
-        skills_dir.mkdir()
-        skill_path = skills_dir / "evolve-me.md"
-        skill_path.write_text(
-            "# Evolve Me\n\n## Steps\nold step content\n\n## Notes\nkeep this\n",
-            encoding="utf-8",
+    def test_full_guide_has_lifecycle(self, db: Database) -> None:
+        """get_onboarding_guide(verbosity='full') returns dict with 'lifecycle' as non-empty string."""
+        result = get_onboarding_guide(verbosity="full", db=db)
+        assert "lifecycle" in result, (
+            f"Missing 'lifecycle' key. Keys: {list(result.keys())}"
         )
+        assert isinstance(result["lifecycle"], str)
+        assert len(result["lifecycle"]) > 0
 
-        db.upsert_skill(Skill(name="evolve-me", path=str(skill_path), description="A skill to evolve",
-                              effectiveness=0.7, total_uses=5, state=LifecycleState.ACTIVE))
-
-        # Seed 3 failures so eligibility passes
-        for _ in range(3):
-            db.conn.execute(
-                "INSERT INTO feedback_log (skill_name, outcome, task_description, created_at) VALUES (?, 'failure', 'task', ?)",
-                ("evolve-me", datetime.utcnow().isoformat()),
+    def test_full_guide_has_integration_protocol(self, db: Database) -> None:
+        """Result has 'integration_protocol' dict with required phase keys."""
+        result = get_onboarding_guide(verbosity="full", db=db)
+        assert "integration_protocol" in result, (
+            f"Missing 'integration_protocol'. Keys: {list(result.keys())}"
+        )
+        proto = result["integration_protocol"]
+        assert isinstance(proto, dict)
+        for key in ("startup", "pre_task", "post_task", "shutdown", "weekly"):
+            assert key in proto, (
+                f"Missing '{key}' in integration_protocol. Keys: {list(proto.keys())}"
             )
+
+    def test_full_guide_has_tools_section(self, db: Database) -> None:
+        """Result has 'tools' dict where each value has 'when' and 'params'/'parameters' and 'returns'."""
+        result = get_onboarding_guide(verbosity="full", db=db)
+        assert "tools" in result, f"Missing 'tools'. Keys: {list(result.keys())}"
+        tools = result["tools"]
+        assert isinstance(tools, dict), f"Expected tools to be dict, got {type(tools)}"
+        for tool_name, tool_info in tools.items():
+            assert "when" in tool_info, f"Tool '{tool_name}' missing 'when'"
+            assert "params" in tool_info or "parameters" in tool_info, (
+                f"Tool '{tool_name}' missing 'params'/'parameters'"
+            )
+            assert "returns" in tool_info, f"Tool '{tool_name}' missing 'returns'"
+
+    def test_full_guide_has_thresholds(self, db: Database) -> None:
+        """Result has 'thresholds' dict with at least the two score thresholds."""
+        result = get_onboarding_guide(verbosity="full", db=db)
+        assert "thresholds" in result, (
+            f"Missing 'thresholds'. Keys: {list(result.keys())}"
+        )
+        thresholds = result["thresholds"]
+        assert isinstance(thresholds, dict)
+        assert "SKILL_MATCH_HIGH_THRESHOLD" in thresholds
+        assert "SKILL_MATCH_LOW_THRESHOLD" in thresholds
+
+    def test_compact_guide_smaller_than_full(self, db: Database) -> None:
+        """Compact guide serialized JSON is smaller than full guide."""
+        import json
+
+        full = get_onboarding_guide(verbosity="full", db=db)
+        compact = get_onboarding_guide(verbosity="compact", db=db)
+        assert isinstance(compact, dict)
+        assert len(json.dumps(compact)) < len(json.dumps(full))
+
+    def test_compact_has_lifecycle_and_protocol(self, db: Database) -> None:
+        """Compact guide retains 'lifecycle' and 'integration_protocol' keys."""
+        result = get_onboarding_guide(verbosity="compact", db=db)
+        assert "lifecycle" in result, (
+            f"Compact missing 'lifecycle'. Keys: {list(result.keys())}"
+        )
+        assert "integration_protocol" in result, (
+            f"Compact missing 'integration_protocol'. Keys: {list(result.keys())}"
+        )
+
+    def test_compact_omits_detailed_tools(self, db: Database) -> None:
+        """Compact guide does NOT have 'tools' key with full descriptions."""
+        result = get_onboarding_guide(verbosity="compact", db=db)
+        if "tools" in result:
+            # If tools key exists, it should be a simple list of names, not detailed dicts
+            tools = result["tools"]
+            if isinstance(tools, dict):
+                # Full guide has dict with 'when'/'params'/'returns' per tool — compact must NOT
+                for tool_info in tools.values():
+                    assert not isinstance(tool_info, dict) or "when" not in tool_info, (
+                        "Compact guide should not have detailed tool descriptions"
+                    )
+
+    def test_default_verbosity_is_full(self, db: Database) -> None:
+        """get_onboarding_guide(db=db) without verbosity returns same structure as full."""
+        default_result = get_onboarding_guide(db=db)
+        full_result = get_onboarding_guide(verbosity="full", db=db)
+        assert set(default_result.keys()) == set(full_result.keys()), (
+            f"Default keys {set(default_result.keys())} != full keys {set(full_result.keys())}"
+        )
+
+    def test_tools_list_includes_skill_match(self, db: Database) -> None:
+        """result['tools'] includes 'skill_match' as a key."""
+        result = get_onboarding_guide(verbosity="full", db=db)
+        tools = result["tools"]
+        assert "skill_match" in tools, (
+            f"'skill_match' not in tools. Keys: {list(tools.keys())}"
+        )
+
+    def test_version_field_present(self, db: Database) -> None:
+        """Result has 'version' key matching pattern r'\\d+\\.\\d+'."""
+        import re
+
+        result = get_onboarding_guide(verbosity="full", db=db)
+        assert "version" in result, f"Missing 'version'. Keys: {list(result.keys())}"
+        assert isinstance(result["version"], str)
+        assert re.match(r"\d+\.\d+", result["version"]), (
+            f"Version '{result['version']}' doesn't match pattern \\d+\\.\\d+"
+        )
+
+
+# === skill_match — suggestion field (SC-02 RED) ===
+
+
+class ScoreControlEncoder:
+    """Encoder that produces specific cosine similarities based on keyword pairs.
+
+    Strategy: use orthogonal basis vectors to control cosine distance precisely.
+    - "high-match" pair: identical vectors → similarity=1.0 → composite score > 0.7
+    - "mid-match" pair: partially overlapping → similarity ~0.5 → composite score ~0.5-0.7
+    - "low-match" pair: orthogonal vectors → similarity ~0 → composite score < 0.5
+    """
+
+    def encode(self, text: str) -> list[float]:
+        vec = [0.0] * 384
+        lowered = text.lower()
+        if "python" in lowered or "rest" in lowered or "api" in lowered:
+            # Dimension 0-191 active
+            for i in range(192):
+                vec[i] = 1.0
+        elif "testing" in lowered or "partial" in lowered:
+            # Overlap with python/rest: dimensions 96-287 active → ~50% overlap
+            for i in range(96, 288):
+                vec[i] = 1.0
+        else:
+            # Completely orthogonal: dimensions 192-383 active
+            for i in range(192, 384):
+                vec[i] = 1.0
+        return vec
+
+
+class TestSkillMatchSuggestion:
+    """Tests for proactive suggestion field in skill_match results."""
+
+    def test_high_score_no_suggestion(self, db: Database) -> None:
+        """Score >= 0.7 → result has NO 'suggestion' key."""
+        encoder = ScoreControlEncoder()
+        skill = Skill(
+            name="python-rest",
+            path="/s/p.md",
+            description="Python REST APIs",
+            effectiveness=0.9,
+            state=LifecycleState.ACTIVE,
+        )
+        db.upsert_skill(skill)
+        db.save_embedding("python-rest", encoder.encode("Python REST APIs"))
+        results = skill_match("python rest endpoint", db=db, encoder=encoder, top_k=3)
+        assert len(results) >= 1
+        assert results[0]["score"] >= 0.7, (
+            f"Expected score >= 0.7, got {results[0]['score']}"
+        )
+        assert "suggestion" not in results[0]
+
+    def test_mid_score_improvement_opportunity(self, db: Database) -> None:
+        """0.5 <= score < 0.7 → suggestion with improvement_opportunity."""
+        encoder = ScoreControlEncoder()
+        # "testing" yields partially overlapping vector → mid-range cosine ~0.5
+        skill = Skill(
+            name="testing-patterns",
+            path="/s/t.md",
+            description="Testing strategies partial",
+            effectiveness=0.5,
+            state=LifecycleState.ACTIVE,
+        )
+        db.upsert_skill(skill)
+        db.save_embedding(
+            "testing-patterns", encoder.encode("Testing strategies partial")
+        )
+        results = skill_match("python rest endpoint", db=db, encoder=encoder, top_k=3)
+        # Find a result with mid-range score
+        mid_results = [r for r in results if 0.5 <= r["score"] < 0.7]
+        assert len(mid_results) >= 1, (
+            f"Expected mid-score result, got scores: {[r['score'] for r in results]}"
+        )
+        suggestion = mid_results[0]["suggestion"]
+        assert suggestion["improvement_opportunity"] is True
+        assert suggestion["suggested_action"] == "evolve_existing"
+
+    def test_low_score_gap_detected(self, db: Database) -> None:
+        """Score < 0.5 → suggestion with gap_detected."""
+        encoder = ScoreControlEncoder()
+        # Skill with completely orthogonal vector → low cosine similarity
+        skill = Skill(
+            name="deploy-k8s",
+            path="/s/d.md",
+            description="Kubernetes deployment",
+            effectiveness=0.3,
+            state=LifecycleState.ACTIVE,
+        )
+        db.upsert_skill(skill)
+        db.save_embedding("deploy-k8s", encoder.encode("Kubernetes deployment"))
+        # Query yields python/rest vector which is orthogonal to deployment vector
+        results = skill_match("python rest endpoint", db=db, encoder=encoder, top_k=3)
+        assert len(results) >= 1
+        assert results[0]["score"] < 0.5, (
+            f"Expected score < 0.5, got {results[0]['score']}"
+        )
+        suggestion = results[0]["suggestion"]
+        assert suggestion["gap_detected"] is True
+        assert suggestion["suggested_action"] == "create_new"
+        assert isinstance(suggestion["suggested_name"], str)
+        assert len(suggestion["suggested_name"]) > 0
+
+    def test_gap_detected_increments_gap_count(self, db: Database) -> None:
+        """When gap detected, closest_match skill's gap_count increments by 1."""
+        encoder = ScoreControlEncoder()
+        skill = Skill(
+            name="deploy-k8s",
+            path="/s/d.md",
+            description="Kubernetes deployment",
+            effectiveness=0.3,
+            gap_count=2,
+            state=LifecycleState.ACTIVE,
+        )
+        db.upsert_skill(skill)
+        db.save_embedding("deploy-k8s", encoder.encode("Kubernetes deployment"))
+        old_gap_count = db.get_skill("deploy-k8s").gap_count
+        # Query producing low score → gap detected
+        results = skill_match("python rest endpoint", db=db, encoder=encoder, top_k=3)
+        assert len(results) >= 1
+        assert results[0]["score"] < 0.5, (
+            f"Expected score < 0.5, got {results[0]['score']}"
+        )
+        new_gap_count = db.get_skill("deploy-k8s").gap_count
+        assert new_gap_count == old_gap_count + 1
+
+    def test_gap_detected_logs_to_gap_log(self, db: Database) -> None:
+        """When gap detected, gap_log table gets a new entry."""
+        encoder = ScoreControlEncoder()
+        skill = Skill(
+            name="deploy-k8s",
+            path="/s/d.md",
+            description="Kubernetes deployment",
+            effectiveness=0.3,
+            state=LifecycleState.ACTIVE,
+        )
+        db.upsert_skill(skill)
+        db.save_embedding("deploy-k8s", encoder.encode("Kubernetes deployment"))
+        skill_match("python rest endpoint", db=db, encoder=encoder, top_k=3)
+        # Check gap_log table has entry
+        cur = db.conn.execute(
+            "SELECT task_description, best_match_name, best_match_score FROM gap_log"
+        )
+        rows = cur.fetchall()
+        assert len(rows) >= 1
+        row = rows[-1]
+        assert row[0] == "python rest endpoint"  # task_description
+        assert row[1] == "deploy-k8s"  # best_match_name
+        assert isinstance(row[2], float)  # best_match_score
+        assert row[2] < 0.5
+
+
+# === gap_log table (SC-02 RED) ===
+
+
+class TestGapLog:
+    """Tests for the gap_log table and access methods."""
+
+    def test_gap_log_table_exists(self, db: Database) -> None:
+        """DB should have gap_log table after init."""
+        cur = db.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='gap_log'"
+        )
+        assert cur.fetchone() is not None, "gap_log table does not exist"
+
+    def test_gap_log_entry_fields(self, db: Database) -> None:
+        """gap_log entry should have all required fields."""
+        # Insert a test entry directly to verify schema
+        db.conn.execute(
+            """INSERT INTO gap_log (timestamp, task_description, best_match_name,
+               best_match_score, session_id, resolved)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                datetime.utcnow().isoformat(),
+                "test task",
+                "some-skill",
+                0.35,
+                "sess-1",
+                False,
+            ),
+        )
         db.conn.commit()
-
-        return db, skills_dir, skill_path
-
-    def test_evolve_dry_run_shows_preview(self, skill_env) -> None:
-        from skill_curator.tools import skill_evolve
-
-        db, skills_dir, skill_path = skill_env
-        result = skill_evolve(
-            "evolve-me",
-            correction="new improved steps",
-            task_description="testing dry run",
-            section="Steps",
-            dry_run=True,
-            db=db,
-            skills_dir=str(skills_dir),
-        )
-        assert result["dry_run"] is True
-        assert result["applied"] is False
-        assert "diff_summary" in result
-        # File should NOT be modified
-        assert "old step content" in skill_path.read_text(encoding="utf-8")
-
-    def test_evolve_applies_and_versions(self, skill_env) -> None:
-        from skill_curator.tools import skill_evolve
-
-        db, skills_dir, skill_path = skill_env
-        result = skill_evolve(
-            "evolve-me",
-            correction="new improved steps",
-            task_description="testing apply",
-            section="Steps",
-            dry_run=False,
-            db=db,
-            skills_dir=str(skills_dir),
-        )
-        assert result["applied"] is True
-        assert result["effectiveness_reset"] is True
-        assert "version_path" in result
-        # File should be modified
-        content = skill_path.read_text(encoding="utf-8")
-        assert "new improved steps" in content
-        assert "old step content" not in content
-        # Version file should exist
-        assert Path(result["version_path"]).exists()
-        # Evolution logged in DB
-        row = db.conn.execute("SELECT * FROM skill_evolutions WHERE skill_name='evolve-me'").fetchone()
+        cur = db.conn.execute("SELECT * FROM gap_log LIMIT 1")
+        row = cur.fetchone()
         assert row is not None
-        # Effectiveness reset to 0.5
-        skill = db.get_skill("evolve-me")
-        assert skill.effectiveness == pytest.approx(0.5)
+        # Verify columns: id, timestamp, task_description, best_match_name, best_match_score, session_id, resolved
+        col_names = [desc[0] for desc in cur.description]
+        assert "id" in col_names
+        assert "timestamp" in col_names
+        assert "task_description" in col_names
+        assert "best_match_name" in col_names
+        assert "best_match_score" in col_names
+        assert "session_id" in col_names
+        assert "resolved" in col_names
 
-    def test_evolve_skill_not_found(self, db: Database, tmp_path: Path) -> None:
-        from skill_curator.tools import skill_evolve
-
-        result = skill_evolve(
-            "nonexistent",
-            correction="fix",
-            db=db,
-            skills_dir=str(tmp_path),
+    def test_gap_log_get_entries(self, db: Database) -> None:
+        """db.get_gap_log() returns entries ordered by timestamp desc."""
+        now = datetime.utcnow()
+        db.conn.execute(
+            """INSERT INTO gap_log (timestamp, task_description, best_match_name,
+               best_match_score, session_id, resolved) VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                (now - timedelta(minutes=10)).isoformat(),
+                "older task",
+                "skill-a",
+                0.3,
+                "s1",
+                False,
+            ),
         )
-        assert "error" in result
-
-    def test_evolve_ineligible_blocks_write(self, tmp_path: Path, db: Database) -> None:
-        from skill_curator.tools import skill_evolve
-        from skill_curator.models import Skill, LifecycleState
-
-        skills_dir = tmp_path / "skills"
-        skills_dir.mkdir()
-        skill_path = skills_dir / "blocked.md"
-        skill_path.write_text("# Blocked\n\n## Steps\ncontent\n", encoding="utf-8")
-        db.upsert_skill(Skill(name="blocked", path=str(skill_path), description="Blocked skill",
-                              state=LifecycleState.ACTIVE))
-        # No failures → ineligible
-        result = skill_evolve(
-            "blocked",
-            correction="new content",
-            section="Steps",
-            dry_run=False,
-            db=db,
-            skills_dir=str(skills_dir),
+        db.conn.execute(
+            """INSERT INTO gap_log (timestamp, task_description, best_match_name,
+               best_match_score, session_id, resolved) VALUES (?, ?, ?, ?, ?, ?)""",
+            (now.isoformat(), "newer task", "skill-b", 0.4, "s1", False),
         )
-        assert "error" in result
-        assert "hint" in result
-        # File unchanged
-        assert "content" in skill_path.read_text(encoding="utf-8")
-
-        # But dry_run still works even if ineligible
-        result_dry = skill_evolve(
-            "blocked",
-            correction="new content",
-            section="Steps",
-            dry_run=True,
-            db=db,
-            skills_dir=str(skills_dir),
-        )
-        assert result_dry["dry_run"] is True
-        assert "diff_summary" in result_dry
-
-
-# === skill_rollback ===
-
-
-class TestSkillRollback:
-    """Integration tests for skill_rollback tool function."""
-
-    @pytest.fixture
-    def evolved_env(self, tmp_path: Path, db: Database) -> tuple[Database, Path, Path, str]:
-        """Set up a skill that has been evolved (has a version)."""
-        from skill_curator.tools import skill_evolve
-        from skill_curator.models import Skill, LifecycleState
-
-        skills_dir = tmp_path / "skills"
-        skills_dir.mkdir()
-        skill_path = skills_dir / "rollback-me.md"
-        original_content = "# Rollback Me\n\n## Steps\noriginal steps\n\n## Notes\nkeep\n"
-        skill_path.write_text(original_content, encoding="utf-8")
-
-        db.upsert_skill(Skill(name="rollback-me", path=str(skill_path), description="Rollback test",
-                              effectiveness=0.7, total_uses=5, state=LifecycleState.ACTIVE))
-        # Seed failures for eligibility
-        for _ in range(3):
-            db.conn.execute(
-                "INSERT INTO feedback_log (skill_name, outcome, task_description, created_at) VALUES (?, 'failure', 'task', ?)",
-                ("rollback-me", datetime.utcnow().isoformat()),
-            )
         db.conn.commit()
+        entries = db.get_gap_log()
+        assert len(entries) >= 2
+        # Most recent first
+        assert entries[0]["task_description"] == "newer task"
+        assert entries[1]["task_description"] == "older task"
 
-        # Evolve it
-        result = skill_evolve(
-            "rollback-me",
-            correction="evolved steps",
-            task_description="evolve for rollback test",
-            section="Steps",
-            dry_run=False,
-            db=db,
-            skills_dir=str(skills_dir),
+    def test_gap_log_get_entries_by_session(self, db: Database) -> None:
+        """db.get_gap_log(session_id='X') filters by session."""
+        now = datetime.utcnow()
+        db.conn.execute(
+            """INSERT INTO gap_log (timestamp, task_description, best_match_name,
+               best_match_score, session_id, resolved) VALUES (?, ?, ?, ?, ?, ?)""",
+            (now.isoformat(), "task session A", "skill-x", 0.2, "session-A", False),
         )
-        version_path = result["version_path"]
-        return db, skills_dir, skill_path, original_content
+        db.conn.execute(
+            """INSERT INTO gap_log (timestamp, task_description, best_match_name,
+               best_match_score, session_id, resolved) VALUES (?, ?, ?, ?, ?, ?)""",
+            (now.isoformat(), "task session B", "skill-y", 0.3, "session-B", False),
+        )
+        db.conn.commit()
+        entries = db.get_gap_log(session_id="session-A")
+        assert len(entries) == 1
+        assert entries[0]["task_description"] == "task session A"
+        assert entries[0]["session_id"] == "session-A"
 
-    def test_rollback_restores_version(self, evolved_env) -> None:
-        from skill_curator.tools import skill_rollback
 
-        db, skills_dir, skill_path, original_content = evolved_env
-        # Current content should be evolved
-        assert "evolved steps" in skill_path.read_text(encoding="utf-8")
+# === skill_gaps correlation (SC-03 RED) ===
 
-        result = skill_rollback("rollback-me", db=db, skills_dir=str(skills_dir))
-        assert result["restored"] is True
-        # Content should match original
-        restored = skill_path.read_text(encoding="utf-8")
-        assert restored == original_content
 
-    def test_rollback_no_versions_error(self, tmp_path: Path, db: Database) -> None:
-        from skill_curator.tools import skill_rollback
-        from skill_curator.models import Skill, LifecycleState
+class ClusteringEncoder:
+    """Encoder that returns similar vectors for semantically similar texts.
 
-        skills_dir = tmp_path / "skills"
-        skills_dir.mkdir()
-        skill_path = skills_dir / "no-versions.md"
-        skill_path.write_text("# No Versions\n", encoding="utf-8")
-        db.upsert_skill(Skill(name="no-versions", path=str(skill_path), description="No versions",
-                              state=LifecycleState.ACTIVE))
+    Uses keyword overlap to simulate real embedding clustering behavior.
+    Texts about 'linkedin/social media' get vectors in one region,
+    texts about other topics get vectors in different regions.
+    """
 
-        result = skill_rollback("no-versions", db=db, skills_dir=str(skills_dir))
-        assert "error" in result
-        assert "No versions" in result["error"]
+    def encode(self, text: str) -> list[float]:
+        lowered = text.lower()
+        if any(
+            w in lowered
+            for w in ["linkedin", "social media", "publish", "post", "share"]
+        ):
+            # Social media cluster: dimensions 0-191 active
+            vec = [0.8] * 192 + [0.1] * 192
+        elif any(w in lowered for w in ["kubernetes", "deploy", "k8s"]):
+            # DevOps cluster: dimensions 192-383 active
+            vec = [0.1] * 192 + [0.8] * 192
+        elif any(w in lowered for w in ["test", "unit", "pytest"]):
+            # Testing cluster: alternating pattern
+            vec = [0.8 if i % 2 == 0 else 0.1 for i in range(384)]
+        elif any(w in lowered for w in ["nginx", "configure", "proxy"]):
+            # Infra cluster: reverse alternating
+            vec = [0.1 if i % 2 == 0 else 0.8 for i in range(384)]
+        else:
+            # Unique/unclustered
+            import hashlib
 
-    def test_rollback_resets_effectiveness(self, evolved_env) -> None:
-        from skill_curator.tools import skill_rollback
+            h = hashlib.md5(lowered.encode()).hexdigest()
+            vec = [int(c, 16) / 15.0 for c in h] * 24  # 384 dims
+        return vec
 
-        db, skills_dir, skill_path, original_content = evolved_env
-        # Evolve changed effectiveness to 0.5, let's bump it to distinguish
-        db.update_effectiveness("rollback-me", 0.8)
-        assert db.get_skill("rollback-me").effectiveness == pytest.approx(0.8)
 
-        skill_rollback("rollback-me", db=db, skills_dir=str(skills_dir))
-        assert db.get_skill("rollback-me").effectiveness == pytest.approx(0.5)
+@pytest.fixture
+def db_with_gap_log(db: Database) -> Database:
+    """DB with gap_log entries for clustering tests."""
+    import time
+
+    # Similar tasks (should cluster) — social media theme
+    for desc in [
+        "post on linkedin",
+        "publish linkedin content",
+        "create linkedin post",
+        "share on social media",
+    ]:
+        db.add_gap_log(
+            task_description=desc,
+            best_match_name="personal-branding",
+            best_match_score=0.45,
+            session_id="test",
+        )
+        time.sleep(0.01)  # ensure different timestamps
+    # Dissimilar task
+    db.add_gap_log(
+        task_description="deploy to kubernetes",
+        best_match_name="k8s-deploy",
+        best_match_score=0.2,
+        session_id="test",
+    )
+    return db
+
+
+@pytest.fixture
+def db_with_diverse_gaps(db: Database) -> Database:
+    """DB with gap_log entries that have DIFFERENT topics (should NOT cluster)."""
+    import time
+
+    for desc in [
+        "deploy kubernetes cluster",
+        "write unit tests for parser",
+        "configure nginx reverse proxy",
+    ]:
+        db.add_gap_log(
+            task_description=desc,
+            best_match_name="generic-skill",
+            best_match_score=0.3,
+            session_id="test",
+        )
+        time.sleep(0.01)
+    return db
+
+
+@pytest.fixture
+def db_with_low_score_cluster(db: Database) -> Database:
+    """DB with gap_log entries that cluster AND have avg best_match_score < 0.3."""
+    import time
+
+    for desc in [
+        "post on linkedin",
+        "publish linkedin content",
+        "create linkedin post",
+    ]:
+        db.add_gap_log(
+            task_description=desc,
+            best_match_name="personal-branding",
+            best_match_score=0.15,
+            session_id="test",
+        )
+        time.sleep(0.01)
+    return db
+
+
+@pytest.fixture
+def db_with_mid_score_cluster(db: Database) -> Database:
+    """DB with gap_log entries that cluster AND have avg best_match_score 0.3-0.6."""
+    import time
+
+    for desc in [
+        "post on linkedin",
+        "publish linkedin content",
+        "create linkedin post",
+    ]:
+        db.add_gap_log(
+            task_description=desc,
+            best_match_name="personal-branding",
+            best_match_score=0.45,
+            session_id="test",
+        )
+        time.sleep(0.01)
+    return db
+
+
+@pytest.fixture
+def db_with_high_score_cluster(db: Database) -> Database:
+    """DB with gap_log entries that cluster AND have avg best_match_score >= 0.6."""
+    import time
+
+    for desc in [
+        "post on linkedin",
+        "publish linkedin content",
+        "create linkedin post",
+    ]:
+        db.add_gap_log(
+            task_description=desc,
+            best_match_name="personal-branding",
+            best_match_score=0.65,
+            session_id="test",
+        )
+        time.sleep(0.01)
+    return db
+
+
+class TestSkillGapsCorrelation:
+    """Tests for skill_gaps(correlate=True) — correlated gap detection (SC-03)."""
+
+    def test_correlate_false_returns_current_behavior(
+        self, db_with_gap_log: Database
+    ) -> None:
+        """skill_gaps(correlate=False) returns same shape as before (list of dicts)."""
+        # Add a skill with gap_count > 0 to ensure results
+        db_with_gap_log.upsert_skill(
+            Skill(
+                name="personal-branding",
+                path="/s/pb.md",
+                gap_count=4,
+                state=LifecycleState.ACTIVE,
+            )
+        )
+        result = skill_gaps(correlate=False, db=db_with_gap_log)
+        # Should return a list (backward compatible)
+        assert isinstance(result, list)
+        assert len(result) >= 1
+        # Each item should have the traditional keys
+        assert "name" in result[0]
+        assert "gap_count" in result[0]
+        assert "last_used_at" in result[0]
+        # Should NOT have correlation keys
+        assert not isinstance(result, dict)
+
+    def test_correlate_true_returns_detected_patterns(
+        self, db_with_gap_log: Database
+    ) -> None:
+        """skill_gaps(correlate=True) returns a dict with known_gaps, detected_patterns, recommendations."""
+        encoder = ClusteringEncoder()
+        result = skill_gaps(correlate=True, db=db_with_gap_log, encoder=encoder)
+        # Should return a dict (new behavior)
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert "known_gaps" in result
+        assert "detected_patterns" in result
+        assert "recommendations" in result
+        # known_gaps should be a list
+        assert isinstance(result["known_gaps"], list)
+        # detected_patterns should be a list
+        assert isinstance(result["detected_patterns"], list)
+        # recommendations should be a list
+        assert isinstance(result["recommendations"], list)
+
+    def test_clusters_similar_tasks(self, db_with_gap_log: Database) -> None:
+        """Similar tasks ('linkedin', 'social media') should cluster into 1 pattern with occurrences >= 3."""
+        encoder = ClusteringEncoder()
+        result = skill_gaps(correlate=True, db=db_with_gap_log, encoder=encoder)
+        patterns = result["detected_patterns"]
+        assert len(patterns) >= 1, f"Expected at least 1 pattern, got {len(patterns)}"
+        # At least one cluster should have 3+ occurrences (4 similar tasks inserted)
+        large_clusters = [p for p in patterns if p["occurrences"] >= 3]
+        assert len(large_clusters) >= 1, (
+            f"Expected cluster with >=3 occurrences, got: {patterns}"
+        )
+
+    def test_dissimilar_tasks_not_clustered(
+        self, db_with_diverse_gaps: Database
+    ) -> None:
+        """Dissimilar tasks should NOT form a cluster with occurrences >= 3."""
+        encoder = ClusteringEncoder()
+        result = skill_gaps(correlate=True, db=db_with_diverse_gaps, encoder=encoder)
+        patterns = result["detected_patterns"]
+        # No cluster should have 3+ occurrences since all tasks are different topics
+        large_clusters = [p for p in patterns if p["occurrences"] >= 3]
+        assert len(large_clusters) == 0, (
+            f"Expected no large clusters, got: {large_clusters}"
+        )
+
+    def test_actionable_flag_when_gte_3(self, db_with_gap_log: Database) -> None:
+        """Cluster with 3+ entries should have 'actionable': True."""
+        encoder = ClusteringEncoder()
+        result = skill_gaps(correlate=True, db=db_with_gap_log, encoder=encoder)
+        patterns = result["detected_patterns"]
+        large_clusters = [p for p in patterns if p["occurrences"] >= 3]
+        assert len(large_clusters) >= 1, "Need at least 1 cluster with >=3 occurrences"
+        for cluster in large_clusters:
+            assert cluster["actionable"] is True, (
+                f"Expected actionable=True, got {cluster}"
+            )
+
+    def test_recommended_action_create_when_low_score(
+        self, db_with_low_score_cluster: Database
+    ) -> None:
+        """Cluster where avg best_match_score < 0.3 → recommended_action = 'create_skill'."""
+        encoder = ClusteringEncoder()
+        result = skill_gaps(
+            correlate=True, db=db_with_low_score_cluster, encoder=encoder
+        )
+        patterns = result["detected_patterns"]
+        assert len(patterns) >= 1, "Expected at least 1 pattern"
+        actionable = [p for p in patterns if p.get("actionable")]
+        assert len(actionable) >= 1, "Expected at least 1 actionable pattern"
+        assert actionable[0]["recommended_action"] == "create_skill"
+
+    def test_recommended_action_evolve_when_mid_score(
+        self, db_with_mid_score_cluster: Database
+    ) -> None:
+        """Cluster where avg best_match_score 0.3-0.6 → recommended_action = 'evolve_skill'."""
+        encoder = ClusteringEncoder()
+        result = skill_gaps(
+            correlate=True, db=db_with_mid_score_cluster, encoder=encoder
+        )
+        patterns = result["detected_patterns"]
+        assert len(patterns) >= 1, "Expected at least 1 pattern"
+        actionable = [p for p in patterns if p.get("actionable")]
+        assert len(actionable) >= 1, "Expected at least 1 actionable pattern"
+        assert actionable[0]["recommended_action"] == "evolve_skill"
+
+    def test_recommended_action_scout_when_high_score(
+        self, db_with_high_score_cluster: Database
+    ) -> None:
+        """Cluster where avg best_match_score >= 0.6 → recommended_action = 'scout_external'."""
+        encoder = ClusteringEncoder()
+        result = skill_gaps(
+            correlate=True, db=db_with_high_score_cluster, encoder=encoder
+        )
+        patterns = result["detected_patterns"]
+        assert len(patterns) >= 1, "Expected at least 1 pattern"
+        actionable = [p for p in patterns if p.get("actionable")]
+        assert len(actionable) >= 1, "Expected at least 1 actionable pattern"
+        assert actionable[0]["recommended_action"] == "scout_external"
+
+    def test_empty_gap_log_returns_empty_patterns(self, db: Database) -> None:
+        """No gap_log entries → detected_patterns = []."""
+        encoder = ClusteringEncoder()
+        result = skill_gaps(correlate=True, db=db, encoder=encoder)
+        assert isinstance(result, dict)
+        assert result["detected_patterns"] == []

@@ -4,6 +4,7 @@ The skill_match tool accepts a profile param (list of skill names).
 Skills in the profile receive a +0.2 score boost.
 load_profile reads ~/.kiro/agents/{name}.json for expected_skills.
 """
+
 import json
 
 import pytest
@@ -29,11 +30,21 @@ class MockEncoder:
 def db() -> Database:
     d = Database(":memory:")
     # Skill A: high similarity to "kubernetes" query
-    skill_a = Skill(name="k8s-deploy", path="/skills/k8s.md", description="deploy to kubernetes",
-                    effectiveness=0.5, state=LifecycleState.ACTIVE)
+    skill_a = Skill(
+        name="k8s-deploy",
+        path="/skills/k8s.md",
+        description="deploy to kubernetes",
+        effectiveness=0.5,
+        state=LifecycleState.ACTIVE,
+    )
     # Skill B: lower similarity
-    skill_b = Skill(name="docker-build", path="/skills/docker.md", description="build docker images",
-                    effectiveness=0.5, state=LifecycleState.ACTIVE)
+    skill_b = Skill(
+        name="docker-build",
+        path="/skills/docker.md",
+        description="build docker images",
+        effectiveness=0.5,
+        state=LifecycleState.ACTIVE,
+    )
     d.upsert_skill(skill_a)
     d.upsert_skill(skill_b)
     encoder = MockEncoder()
@@ -45,11 +56,19 @@ def db() -> Database:
 class TestProfileBoost:
     def test_profile_boost_increases_score(self, db: Database) -> None:
         encoder = MockEncoder()
-        results_no_profile = skill_match("kubernetes deploy", db=db, encoder=encoder, profile=None)
-        results_with_profile = skill_match("kubernetes deploy", db=db, encoder=encoder, profile=["k8s-deploy"])
+        results_no_profile = skill_match(
+            "kubernetes deploy", db=db, encoder=encoder, profile=None
+        )
+        results_with_profile = skill_match(
+            "kubernetes deploy", db=db, encoder=encoder, profile=["k8s-deploy"]
+        )
 
-        score_no = next(r["score"] for r in results_no_profile if r["name"] == "k8s-deploy")
-        score_with = next(r["score"] for r in results_with_profile if r["name"] == "k8s-deploy")
+        score_no = next(
+            r["score"] for r in results_no_profile if r["name"] == "k8s-deploy"
+        )
+        score_with = next(
+            r["score"] for r in results_with_profile if r["name"] == "k8s-deploy"
+        )
         assert score_with > score_no
 
     def test_profile_none_no_boost(self, db: Database) -> None:
@@ -62,8 +81,12 @@ class TestProfileBoost:
 
     def test_profile_empty_list_no_boost(self, db: Database) -> None:
         encoder = MockEncoder()
-        results_none = skill_match("kubernetes deploy", db=db, encoder=encoder, profile=None)
-        results_empty = skill_match("kubernetes deploy", db=db, encoder=encoder, profile=[])
+        results_none = skill_match(
+            "kubernetes deploy", db=db, encoder=encoder, profile=None
+        )
+        results_empty = skill_match(
+            "kubernetes deploy", db=db, encoder=encoder, profile=[]
+        )
         # Empty list should behave same as None
         for rn, re in zip(results_none, results_empty):
             assert rn["score"] == re["score"]
@@ -71,7 +94,13 @@ class TestProfileBoost:
     def test_profile_reorders_results(self, db: Database) -> None:
         encoder = MockEncoder()
         # docker-build has lower similarity but is in profile → should overtake k8s-deploy
-        results = skill_match("kubernetes deploy", db=db, encoder=encoder, profile=["docker-build"], top_k=2)
+        results = skill_match(
+            "kubernetes deploy",
+            db=db,
+            encoder=encoder,
+            profile=["docker-build"],
+            top_k=2,
+        )
         # With +0.2 boost, docker-build should rank first despite lower similarity
         assert results[0]["name"] == "docker-build"
 
@@ -80,7 +109,9 @@ class TestLoadProfile:
     def test_get_profile_from_file(self, tmp_path, monkeypatch) -> None:
         agents_dir = tmp_path / ".kiro" / "agents"
         agents_dir.mkdir(parents=True)
-        profile_data = {"expected_skills": ["k8s-deploy", "docker-build", "python-rest"]}
+        profile_data = {
+            "expected_skills": ["k8s-deploy", "docker-build", "python-rest"]
+        }
         (agents_dir / "backend-dev.json").write_text(json.dumps(profile_data))
 
         monkeypatch.setenv("HOME", str(tmp_path))
@@ -92,10 +123,15 @@ class TestLoadProfile:
         result = load_profile("nonexistent-profile")
         assert result == []
 
-    def test_profile_file_no_expected_skills_returns_empty(self, tmp_path, monkeypatch) -> None:
+    def test_profile_file_no_expected_skills_returns_empty(
+        self, tmp_path, monkeypatch
+    ) -> None:
         agents_dir = tmp_path / ".kiro" / "agents"
         agents_dir.mkdir(parents=True)
-        profile_data = {"name": "backend-dev", "description": "A profile without skills"}
+        profile_data = {
+            "name": "backend-dev",
+            "description": "A profile without skills",
+        }
         (agents_dir / "backend-dev.json").write_text(json.dumps(profile_data))
 
         monkeypatch.setenv("HOME", str(tmp_path))

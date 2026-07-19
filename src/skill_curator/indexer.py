@@ -1,4 +1,5 @@
 """Filesystem scanning, markdown parsing, and embedding generation."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -9,7 +10,14 @@ import yaml
 from skill_curator.db import Database
 from skill_curator.models import Skill
 
-_EXCLUDED = {"README.md", "CHANGELOG.md", "MEMORY.md", "AGENTS.md", "ARCHITECTURE.md", "PRD.md"}
+_EXCLUDED = {
+    "README.md",
+    "CHANGELOG.md",
+    "MEMORY.md",
+    "AGENTS.md",
+    "ARCHITECTURE.md",
+    "PRD.md",
+}
 
 
 def parse_skill_md(path: Path) -> dict[str, Any]:

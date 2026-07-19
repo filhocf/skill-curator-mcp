@@ -1,4 +1,5 @@
 """Profile-aware skill matching — load expected_skills from agent profiles."""
+
 from __future__ import annotations
 
 import json

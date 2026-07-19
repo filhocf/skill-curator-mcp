@@ -1,4 +1,5 @@
 """Tests for skill_curator.models — domain dataclasses and enums."""
+
 import pytest
 
 from skill_curator.models import FeedbackEntry, LifecycleState, ScoutedSkill, Skill

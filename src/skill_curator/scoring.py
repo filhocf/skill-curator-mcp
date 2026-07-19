@@ -1,4 +1,5 @@
 """Scoring functions — cosine similarity and composite ranking."""
+
 from __future__ import annotations
 
 import math
@@ -22,7 +23,9 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     return dot / (norm_a * norm_b)
 
 
-def composite_score(similarity: float, effectiveness: float, profile_match: bool) -> float:
+def composite_score(
+    similarity: float, effectiveness: float, profile_match: bool
+) -> float:
     """Compute weighted composite score.
 
     Formula: 0.6 * similarity + 0.2 * effectiveness + 0.2 * profile_match

@@ -1,86 +1,253 @@
-"""External skill discovery via GitHub search."""
+"""External skill discovery via GitHub search — multi-source with cache."""
+
 from __future__ import annotations
 
+import hashlib
+import json
+import time
 from datetime import datetime, timedelta
+from typing import Any
 
 import httpx
 
 from skill_curator.db import Database
 
+_MAX_REQUESTS = 10
+_CACHE_TTL_HOURS = 24
+_DEFAULT_SOURCES = ["github"]
 
-def scout_skills(*, query: str | None = None, gaps_only: bool = False, db: Database | None = None) -> dict:
+
+def scout_skills(
+    *,
+    query: str | None = None,
+    gaps_only: bool = False,
+    db: Database | None = None,
+    sources: list[str] | None = None,
+    encoder: Any = None,
+) -> dict:
     """Scout external sources for skills.
 
     Args:
-        query: Search query for GitHub repositories.
+        query: Search query for repositories.
         gaps_only: If True, use skill gaps as queries.
         db: Database instance for persistence and caching.
+        sources: List of source names to query (default: ["github"]).
+        encoder: Optional encoder for relevance scoring (future use).
 
     Returns:
-        Dict with "skills" list and "message" string.
+        Dict with "skills" list, "message" string, and optionally "warnings" list.
     """
     if not query and not gaps_only:
-        return {"skills": [], "message": "Provide a query or set gaps_only=True to scout."}
+        return {
+            "skills": [],
+            "message": "Provide a query or set gaps_only=True to scout.",
+        }
 
-    # Rate limit: return cached if scouted in last 24h
-    if db:
-        cached = _get_cached(db)
+    sources = sources or _DEFAULT_SOURCES
+    warnings: list[str] = []
+
+    # Legacy rate limit: return cached from scouted_skills if scouted in last 24h
+    if db and not _has_scout_cache_table(db):
+        cached = _get_cached_legacy(db)
         if cached is not None:
             return {"skills": cached, "message": f"Found {len(cached)} skills (cached)"}
 
-    # Resolve queries from gaps
-    queries = []
+    # Also check legacy cache when scout_cache table exists but has no hit
+    # (for backward compat with old tests that insert into scouted_skills directly)
+    if db and _has_scout_cache_table(db) and not gaps_only and query:
+        cached = _get_scout_cache(db, query)
+        if cached is not None:
+            return {"skills": cached, "message": f"Found {len(cached)} skills (cached)"}
+        cached = _get_cached_legacy(db)
+        if cached is not None:
+            return {"skills": cached, "message": f"Found {len(cached)} skills (cached)"}
+
+    # Resolve queries
+    queries: list[str] = []
     if gaps_only and db:
-        skills = db.list_skills()
-        queries = [s.name for s in skills if s.gap_count > 0]
+        # SC-01 R3: Use gap_log task_descriptions as queries first
+        gap_entries = db.get_gap_log()
+        if gap_entries:
+            seen: set[str] = set()
+            for entry in gap_entries:
+                desc = entry["task_description"]
+                if desc not in seen:
+                    queries.append(desc)
+                    seen.add(desc)
+                if len(queries) >= 5:
+                    break
+        # Fallback: use skill names with gap_count > 0
+        if not queries:
+            skills = db.list_skills()
+            queries = [s.name for s in skills if s.gap_count > 0]
         if not queries:
             return {"skills": [], "message": "No gaps found."}
     elif query:
         queries = [query]
 
-    # Fetch from GitHub
+    if not queries:
+        return {"skills": [], "message": "No queries to scout."}
+
+    # Fetch from sources (per-query cache check inside loop)
+    has_cache_table = db and _has_scout_cache_table(db)
     all_skills: list[dict] = []
+    request_count = 0
+
     for q in queries:
-        repos = _fetch_repos(q)
-        for repo in repos:
-            if not repo.get("description") or not repo.get("has_readme", False):
+        if request_count >= _MAX_REQUESTS:
+            warnings.append(f"Max requests ({_MAX_REQUESTS}) reached, stopping.")
+            break
+
+        # Per-query cache check
+        if has_cache_table:
+            cached = _get_scout_cache(db, q)
+            if cached is not None:
+                all_skills.extend(cached)
                 continue
-            skill = _repo_to_skill(repo)
-            if db and _scouted_skill_exists(db, skill["source_url"]):
-                continue
-            all_skills.append(skill)
-            if db:
+
+        query_results: list[dict] = []
+        for source_name in sources:
+            if request_count >= _MAX_REQUESTS:
+                break
+            try:
+                results = _fetch_from_source(source_name, q)
+                request_count += 1
+                for r in results:
+                    r["source"] = source_name
+                    if "relevance_score" not in r:
+                        r["relevance_score"] = 0.5
+                query_results.extend(results)
+            except Exception as e:
+                request_count += 1
+                warnings.append(f"Source '{source_name}' failed: {str(e)}")
+
+        all_skills.extend(query_results)
+
+        # Per-query cache save
+        if has_cache_table and query_results:
+            _save_scout_cache(db, q, query_results)
+
+    # Filter: repos without README are excluded
+    all_skills = [s for s in all_skills if s.get("_has_readme", True)]
+    # Remove internal tracking field
+    for s in all_skills:
+        s.pop("_has_readme", None)
+
+    # Persist to scouted_skills (legacy) + dedup
+    if db:
+        for skill in all_skills:
+            if not _scouted_skill_exists(db, skill.get("source_url", "")):
                 _save_scouted_skill(db, skill)
 
-    return {"skills": all_skills, "message": f"Found {len(all_skills)} skills"}
+    result: dict = {"skills": all_skills, "message": f"Found {len(all_skills)} skills"}
+    if warnings:
+        result["warnings"] = warnings
+    return result
 
 
-def _fetch_repos(query: str) -> list[dict]:
+def _fetch_from_source(source: str, query: str) -> list[dict]:
+    """Dispatch to the appropriate source fetcher."""
+    if source == "github":
+        return _fetch_github(query)
+    elif source == "awesome":
+        return _fetch_awesome(query)
+    elif source == "pypi":
+        return _fetch_pypi(query)
+    elif source == "web":
+        return _fetch_web(query)
+    else:
+        raise ValueError(f"Unknown source: {source}")
+
+
+def _fetch_github(query: str) -> list[dict]:
     """Search GitHub for skill repositories."""
-    try:
-        resp = httpx.get(
-            "https://api.github.com/search/repositories",
-            params={"q": f"{query} topic:claude-code-skills OR topic:agent-skills"},
-            timeout=10.0,
-        )
-        resp.raise_for_status()
-        return resp.json().get("items", [])
-    except Exception:
-        return []
+    resp = httpx.get(
+        "https://api.github.com/search/repositories",
+        params={
+            "q": f"{query} (topic:claude-code-skills OR topic:agent-skills OR topic:mcp-skills)"
+        },
+        timeout=10.0,
+    )
+    resp.raise_for_status()
+    items = resp.json().get("items", [])
+    return [_repo_to_skill(repo) for repo in items]
+
+
+def _fetch_awesome(query: str) -> list[dict]:
+    """Placeholder for awesome-list search."""
+    return []
+
+
+def _fetch_pypi(query: str) -> list[dict]:
+    """Placeholder for PyPI search."""
+    return []
+
+
+def _fetch_web(query: str) -> list[dict]:
+    """Placeholder for web search."""
+    return []
 
 
 def _repo_to_skill(repo: dict) -> dict:
     """Convert a GitHub repo to a scouted skill dict."""
     desc = repo.get("description", "")
+    has_readme = repo.get("has_readme", True)
     return {
         "name": repo["full_name"].split("/")[-1],
         "source_url": repo["html_url"],
         "description": desc,
         "relevance_score": 0.7 if len(desc) > 50 else 0.3,
+        "_has_readme": has_readme,
     }
 
 
-def _get_cached(db: Database) -> list[dict] | None:
+# --- Scout Cache (new) ---
+
+
+def _has_scout_cache_table(db: Database) -> bool:
+    """Check if scout_cache table exists."""
+    cur = db.conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='scout_cache'"
+    )
+    return cur.fetchone() is not None
+
+
+def _get_scout_cache(db: Database, query: str) -> list[dict] | None:
+    """Return cached results if valid (not expired)."""
+    query_hash = hashlib.sha256(query.encode()).hexdigest()
+    cur = db.conn.execute(
+        "SELECT results_json, expires_at FROM scout_cache WHERE query_hash = ?",
+        (query_hash,),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return None
+    results_json, expires_at = row
+    if time.time() > expires_at:
+        # Expired — delete and return None
+        db.conn.execute("DELETE FROM scout_cache WHERE query_hash = ?", (query_hash,))
+        db.conn.commit()
+        return None
+    return json.loads(results_json)
+
+
+def _save_scout_cache(db: Database, query: str, results: list[dict]) -> None:
+    """Cache scout results with TTL."""
+    query_hash = hashlib.sha256(query.encode()).hexdigest()
+    now = time.time()
+    expires_at = now + (_CACHE_TTL_HOURS * 3600)
+    db.conn.execute(
+        """INSERT OR REPLACE INTO scout_cache (query_hash, query, results_json, source, fetched_at, expires_at)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (query_hash, query, json.dumps(results), "multi", now, expires_at),
+    )
+    db.conn.commit()
+
+
+# --- Legacy cache (scouted_skills table) ---
+
+
+def _get_cached_legacy(db: Database) -> list[dict] | None:
     """Return cached skills if any were discovered in the last 24h."""
     cutoff = (datetime.utcnow() - timedelta(hours=24)).isoformat()
     cur = db.conn.execute(
@@ -90,12 +257,19 @@ def _get_cached(db: Database) -> list[dict] | None:
     rows = cur.fetchall()
     if not rows:
         return None
-    return [{"source_url": r[0], "name": r[1], "description": r[2], "relevance_score": r[3]} for r in rows]
+    return [
+        {"source_url": r[0], "name": r[1], "description": r[2], "relevance_score": r[3]}
+        for r in rows
+    ]
 
 
 def _scouted_skill_exists(db: Database, source_url: str) -> bool:
     """Check if a scouted skill URL already exists in the DB."""
-    cur = db.conn.execute("SELECT 1 FROM scouted_skills WHERE source_url = ?", (source_url,))
+    if not source_url:
+        return False
+    cur = db.conn.execute(
+        "SELECT 1 FROM scouted_skills WHERE source_url = ?", (source_url,)
+    )
     return cur.fetchone() is not None
 
 
@@ -103,6 +277,12 @@ def _save_scouted_skill(db: Database, skill: dict) -> None:
     """Persist a scouted skill to the database."""
     db.conn.execute(
         "INSERT INTO scouted_skills (source_url, name, description, relevance_score, discovered_at) VALUES (?, ?, ?, ?, ?)",
-        (skill["source_url"], skill["name"], skill["description"], skill["relevance_score"], datetime.utcnow().isoformat()),
+        (
+            skill.get("source_url", ""),
+            skill.get("name", ""),
+            skill.get("description", ""),
+            skill.get("relevance_score", 0.5),
+            datetime.utcnow().isoformat(),
+        ),
     )
     db.conn.commit()

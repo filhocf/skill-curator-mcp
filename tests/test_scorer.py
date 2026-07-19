@@ -1,4 +1,5 @@
 """Tests for skill_curator.scoring — cosine similarity and composite score."""
+
 import pytest
 
 from skill_curator.scoring import composite_score, cosine_similarity

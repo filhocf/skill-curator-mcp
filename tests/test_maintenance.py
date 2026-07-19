@@ -1,4 +1,5 @@
 """Tests for skill_curator.maintenance — daily maintenance script."""
+
 from datetime import datetime, timedelta
 
 import pytest
@@ -33,25 +34,42 @@ def skills_dir(tmp_path):
 @pytest.fixture
 def populated_db(db, skills_dir):
     """DB with mix: active recent, active 40d inactive, stale 100d."""
-    db.upsert_skill(Skill(
-        name="fresh-skill", path=str(skills_dir / "good-skill.md"),
-        state=LifecycleState.ACTIVE, last_used_at=_days_ago(2),
-    ))
-    db.upsert_skill(Skill(
-        name="inactive-skill", path=str(skills_dir / "good-skill.md"),
-        state=LifecycleState.ACTIVE, last_used_at=_days_ago(40),
-    ))
-    db.upsert_skill(Skill(
-        name="old-stale", path=str(skills_dir / "bad-skill.md"),
-        state=LifecycleState.STALE, last_used_at=_days_ago(100),
-    ))
+    db.upsert_skill(
+        Skill(
+            name="fresh-skill",
+            path=str(skills_dir / "good-skill.md"),
+            state=LifecycleState.ACTIVE,
+            last_used_at=_days_ago(2),
+        )
+    )
+    db.upsert_skill(
+        Skill(
+            name="inactive-skill",
+            path=str(skills_dir / "good-skill.md"),
+            state=LifecycleState.ACTIVE,
+            last_used_at=_days_ago(40),
+        )
+    )
+    db.upsert_skill(
+        Skill(
+            name="old-stale",
+            path=str(skills_dir / "bad-skill.md"),
+            state=LifecycleState.STALE,
+            last_used_at=_days_ago(100),
+        )
+    )
     return db
 
 
 class TestRunMaintenance:
     def test_maintenance_returns_complete_report(self, populated_db, skills_dir):
         report = run_maintenance(populated_db, skills_dir)
-        assert set(report.keys()) == {"staled", "archived", "low_quality_count", "total_skills"}
+        assert set(report.keys()) == {
+            "staled",
+            "archived",
+            "low_quality_count",
+            "total_skills",
+        }
 
     def test_maintenance_stales_inactive(self, populated_db, skills_dir):
         report = run_maintenance(populated_db, skills_dir)
@@ -68,7 +86,7 @@ class TestRunMaintenance:
         assert report["low_quality_count"] >= 1  # bad-skill.md has no frontmatter
 
     def test_maintenance_idempotent(self, populated_db, skills_dir):
-        first = run_maintenance(populated_db, skills_dir)
+        run_maintenance(populated_db, skills_dir)
         second = run_maintenance(populated_db, skills_dir)
         assert second["staled"] == []
         assert second["archived"] == []

@@ -139,7 +139,7 @@ CREATE TABLE skill_evolutions (
 
 ## Open Questions
 
-1. **Who generates the corrected content?** The calling agent (Kiro) rewrites inline? Or skill_evolve uses a local LLM (Ollama) to rewrite? 
+1. **Who generates the corrected content?** The calling agent (Kiro) rewrites inline? Or skill_evolve uses a local LLM (Ollama) to rewrite?
    - **Proposed**: Agent provides `correction` in natural language. The tool applies it as a patch (string replacement or section rewrite). No LLM inside the tool.
 
 2. **Approval gate**: Should evolved skills require human approval before being active?

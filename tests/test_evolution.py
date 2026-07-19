@@ -1,4 +1,5 @@
 """Tests for skill_curator.evolution — evolution module unit tests."""
+
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -25,11 +26,7 @@ def skill_file(tmp_path: Path) -> Path:
     """Create a sample skill markdown file."""
     p = tmp_path / "sample-skill.md"
     p.write_text(
-        "# Sample Skill\n\n"
-        "## Steps\n"
-        "old step content\n\n"
-        "## Notes\n"
-        "some notes here\n",
+        "# Sample Skill\n\n## Steps\nold step content\n\n## Notes\nsome notes here\n",
         encoding="utf-8",
     )
     return p
@@ -74,14 +71,18 @@ class TestCheckEvolveEligibility:
     def test_ineligible_cooldown_active(self, db: Database) -> None:
         _seed_failures(db, "my-skill", 3)
         _seed_evolution(db, "my-skill", hours_ago=0.5)
-        result = check_evolve_eligibility("my-skill", db, min_failures=2, cooldown_hours=1.0)
+        result = check_evolve_eligibility(
+            "my-skill", db, min_failures=2, cooldown_hours=1.0
+        )
         assert result is not None
         assert "Cooldown" in result or "cooldown" in result.lower()
 
     def test_eligible_after_cooldown(self, db: Database) -> None:
         _seed_failures(db, "my-skill", 3)
         _seed_evolution(db, "my-skill", hours_ago=2.0)
-        result = check_evolve_eligibility("my-skill", db, min_failures=2, cooldown_hours=1.0)
+        result = check_evolve_eligibility(
+            "my-skill", db, min_failures=2, cooldown_hours=1.0
+        )
         assert result is None
 
 
@@ -90,7 +91,9 @@ class TestCheckEvolveEligibility:
 
 class TestApplyEvolution:
     def test_apply_section_replacement(self, skill_file: Path) -> None:
-        original, new_content = apply_evolution(skill_file, "new step content", section="Steps")
+        original, new_content = apply_evolution(
+            skill_file, "new step content", section="Steps"
+        )
         assert "old step content" in original
         assert "new step content" in new_content
         assert "old step content" not in new_content
@@ -100,12 +103,16 @@ class TestApplyEvolution:
             apply_evolution(skill_file, "correction", section="NonExistent")
 
     def test_apply_append_when_no_section(self, skill_file: Path) -> None:
-        original, new_content = apply_evolution(skill_file, "appended correction", section=None)
+        original, new_content = apply_evolution(
+            skill_file, "appended correction", section=None
+        )
         assert "## Corrections" in new_content
         assert "appended correction" in new_content
 
     def test_preserves_other_sections(self, skill_file: Path) -> None:
-        original, new_content = apply_evolution(skill_file, "replaced steps", section="Steps")
+        original, new_content = apply_evolution(
+            skill_file, "replaced steps", section="Steps"
+        )
         assert "## Notes" in new_content
         assert "some notes here" in new_content
 
@@ -172,7 +179,9 @@ class TestLogEvolution:
             previous_version="/versions/v1.md",
             triggered_by="agent",
         )
-        row = db.conn.execute("SELECT * FROM skill_evolutions WHERE skill_name = 'test-skill'").fetchone()
+        row = db.conn.execute(
+            "SELECT * FROM skill_evolutions WHERE skill_name = 'test-skill'"
+        ).fetchone()
         assert row is not None
 
     def test_all_fields_stored(self, db: Database) -> None:
@@ -214,9 +223,15 @@ class TestGetLatestVersion:
 
         versions_dir = tmp_path / ".versions"
         versions_dir.mkdir()
-        (versions_dir / "skill.2025-01-01T10-00-00.md").write_text("old", encoding="utf-8")
-        (versions_dir / "skill.2025-06-15T12-00-00.md").write_text("newer", encoding="utf-8")
-        (versions_dir / "skill.2025-03-10T08-00-00.md").write_text("middle", encoding="utf-8")
+        (versions_dir / "skill.2025-01-01T10-00-00.md").write_text(
+            "old", encoding="utf-8"
+        )
+        (versions_dir / "skill.2025-06-15T12-00-00.md").write_text(
+            "newer", encoding="utf-8"
+        )
+        (versions_dir / "skill.2025-03-10T08-00-00.md").write_text(
+            "middle", encoding="utf-8"
+        )
 
         result = get_latest_version(skill_path)
         assert result is not None

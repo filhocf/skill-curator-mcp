@@ -1,7 +1,7 @@
 """SQLite storage layer with sqlite-vec for embeddings."""
+
 from __future__ import annotations
 
-import json
 import sqlite3
 from datetime import datetime, timedelta
 from typing import Optional
@@ -59,6 +59,25 @@ CREATE TABLE IF NOT EXISTS scouted_skills (
     status TEXT DEFAULT 'new',
     discovered_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS gap_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp REAL NOT NULL,
+    task_description TEXT NOT NULL,
+    best_match_name TEXT,
+    best_match_score REAL,
+    session_id TEXT,
+    resolved INTEGER DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS scout_cache (
+    query_hash TEXT PRIMARY KEY,
+    query TEXT NOT NULL,
+    results_json TEXT NOT NULL,
+    source TEXT NOT NULL,
+    fetched_at REAL NOT NULL,
+    expires_at REAL NOT NULL
+);
 """
 
 _VEC_SCHEMA = """
@@ -98,10 +117,19 @@ class Database:
                profile_tags=excluded.profile_tags, last_used_at=excluded.last_used_at,
                last_indexed_at=excluded.last_indexed_at""",
             (
-                skill.name, skill.path, skill.description, skill.trigger_text,
-                skill.effectiveness, skill.total_uses, skill.total_successes,
-                skill.gap_count, skill.state.value, skill.profile_tags,
-                skill.last_used_at, skill.last_indexed_at, skill.created_at,
+                skill.name,
+                skill.path,
+                skill.description,
+                skill.trigger_text,
+                skill.effectiveness,
+                skill.total_uses,
+                skill.total_successes,
+                skill.gap_count,
+                skill.state.value,
+                skill.profile_tags,
+                skill.last_used_at,
+                skill.last_indexed_at,
+                skill.created_at,
             ),
         )
         self.conn.commit()
@@ -117,7 +145,9 @@ class Database:
     def list_skills(self, state: Optional[LifecycleState] = None) -> list[Skill]:
         """List skills, optionally filtered by state."""
         if state:
-            cur = self.conn.execute("SELECT * FROM skills WHERE state = ?", (state.value,))
+            cur = self.conn.execute(
+                "SELECT * FROM skills WHERE state = ?", (state.value,)
+            )
         else:
             cur = self.conn.execute("SELECT * FROM skills")
         return [self._row_to_skill(row) for row in cur.fetchall()]
@@ -127,8 +157,13 @@ class Database:
         self.conn.execute(
             """INSERT INTO feedback_log (skill_name, session_id, outcome, task_description, created_at)
                VALUES (?, ?, ?, ?, ?)""",
-            (entry.skill_name, entry.session_id, entry.outcome,
-             entry.task_description, entry.created_at or datetime.utcnow().isoformat()),
+            (
+                entry.skill_name,
+                entry.session_id,
+                entry.outcome,
+                entry.task_description,
+                entry.created_at or datetime.utcnow().isoformat(),
+            ),
         )
         self.conn.commit()
 
@@ -139,19 +174,28 @@ class Database:
             (skill_name,),
         )
         return [
-            FeedbackEntry(skill_name=r[0], outcome=r[1], task_description=r[2],
-                          session_id=r[3], created_at=r[4])
+            FeedbackEntry(
+                skill_name=r[0],
+                outcome=r[1],
+                task_description=r[2],
+                session_id=r[3],
+                created_at=r[4],
+            )
             for r in cur.fetchall()
         ]
 
     def update_effectiveness(self, name: str, value: float) -> None:
         """Update a skill's effectiveness score."""
-        self.conn.execute("UPDATE skills SET effectiveness = ? WHERE name = ?", (value, name))
+        self.conn.execute(
+            "UPDATE skills SET effectiveness = ? WHERE name = ?", (value, name)
+        )
         self.conn.commit()
 
     def transition_state(self, name: str, new_state: LifecycleState) -> None:
         """Transition a skill to a new lifecycle state."""
-        self.conn.execute("UPDATE skills SET state = ? WHERE name = ?", (new_state.value, name))
+        self.conn.execute(
+            "UPDATE skills SET state = ? WHERE name = ?", (new_state.value, name)
+        )
         self.conn.commit()
 
     def get_stale_skills(self, days: int = 30) -> list[Skill]:
@@ -166,6 +210,7 @@ class Database:
     def save_embedding(self, name: str, embedding: list[float]) -> None:
         """Save or replace an embedding for a skill."""
         import struct
+
         blob = struct.pack(f"{len(embedding)}f", *embedding)
         # sqlite-vec virtual tables don't support INSERT OR REPLACE
         self.conn.execute("DELETE FROM skill_embeddings WHERE name = ?", (name,))
@@ -175,9 +220,12 @@ class Database:
         )
         self.conn.commit()
 
-    def search_similar(self, query_vec: list[float], limit: int = 5) -> list[tuple[str, float]]:
+    def search_similar(
+        self, query_vec: list[float], limit: int = 5
+    ) -> list[tuple[str, float]]:
         """Search for similar skills by embedding distance."""
         import struct
+
         blob = struct.pack(f"{len(query_vec)}f", *query_vec)
         cur = self.conn.execute(
             "SELECT name, distance FROM skill_embeddings WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
@@ -185,11 +233,67 @@ class Database:
         )
         return [(row[0], row[1]) for row in cur.fetchall()]
 
+    def add_gap_log(
+        self,
+        task_description: str,
+        best_match_name: str | None,
+        best_match_score: float,
+        session_id: str | None = None,
+    ) -> None:
+        """Log a gap detection."""
+        import time
+
+        self.conn.execute(
+            """INSERT INTO gap_log (timestamp, task_description, best_match_name, best_match_score, session_id, resolved)
+               VALUES (?, ?, ?, ?, ?, 0)""",
+            (
+                time.time(),
+                task_description,
+                best_match_name,
+                best_match_score,
+                session_id,
+            ),
+        )
+        self.conn.commit()
+
+    def get_gap_log(self, session_id: str | None = None) -> list[dict]:
+        """Get gap log entries, optionally filtered by session_id. Ordered by timestamp DESC."""
+        if session_id is not None:
+            cur = self.conn.execute(
+                "SELECT id, timestamp, task_description, best_match_name, best_match_score, session_id, resolved "
+                "FROM gap_log WHERE session_id = ? ORDER BY timestamp DESC",
+                (session_id,),
+            )
+        else:
+            cur = self.conn.execute(
+                "SELECT id, timestamp, task_description, best_match_name, best_match_score, session_id, resolved "
+                "FROM gap_log ORDER BY timestamp DESC"
+            )
+        cols = [
+            "id",
+            "timestamp",
+            "task_description",
+            "best_match_name",
+            "best_match_score",
+            "session_id",
+            "resolved",
+        ]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
+
     def _row_to_skill(self, row: tuple) -> Skill:
         """Convert a DB row to a Skill dataclass."""
         return Skill(
-            name=row[0], path=row[1], description=row[2], trigger_text=row[3],
-            effectiveness=row[4], total_uses=row[5], total_successes=row[6],
-            gap_count=row[7], state=row[8], profile_tags=row[9],
-            last_used_at=row[10], last_indexed_at=row[11], created_at=row[12],
+            name=row[0],
+            path=row[1],
+            description=row[2],
+            trigger_text=row[3],
+            effectiveness=row[4],
+            total_uses=row[5],
+            total_successes=row[6],
+            gap_count=row[7],
+            state=row[8],
+            profile_tags=row[9],
+            last_used_at=row[10],
+            last_indexed_at=row[11],
+            created_at=row[12],
         )

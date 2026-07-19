@@ -1,4 +1,5 @@
 """Lifecycle automation for skill evolution."""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -27,7 +28,9 @@ def auto_stale(db: Database, days: int = 30) -> list[str]:
     return staled
 
 
-def auto_archive(db: Database, stale_days: int = 90, min_effectiveness: float = 0.3) -> list[str]:
+def auto_archive(
+    db: Database, stale_days: int = 90, min_effectiveness: float = 0.3
+) -> list[str]:
     """Archive stale skills that exceed stale_days or have low effectiveness.
 
     Args:
