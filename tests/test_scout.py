@@ -252,7 +252,7 @@ def mock_httpx(monkeypatch):
 
     def mock_get(url, **kwargs):
         call_count["n"] += 1
-        if "github.com" in url:
+        if url.startswith("https://api.github.com"):
             return MockResponse(
                 json={
                     "items": [
@@ -435,7 +435,7 @@ class TestScoutMultiSource:
 
         def mock_get(url, **kwargs):
             call_count["n"] += 1
-            if "github.com" in url:
+            if url.startswith("https://api.github.com"):
                 raise ConnectionError("GitHub is down")
             # Other sources return valid data
             return MockResponse(
