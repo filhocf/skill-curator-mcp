@@ -1,4 +1,5 @@
 """FastMCP server for skill-curator."""
+
 from __future__ import annotations
 
 import os
@@ -22,11 +23,19 @@ from skill_curator.tools import (
 )
 
 _port = int(os.environ.get("SKILL_CURATOR_PORT", "3204"))
-_skills_dir = os.environ.get("SKILL_CURATOR_SKILLS_DIR", os.path.expanduser("~/.kiro/skills"))
-_db_dir = os.environ.get("SKILL_CURATOR_DB_DIR", os.path.expanduser("~/.local/share/skill-curator"))
+_skills_dir = os.environ.get(
+    "SKILL_CURATOR_SKILLS_DIR", os.path.expanduser("~/.kiro/skills")
+)
+_db_dir = os.environ.get(
+    "SKILL_CURATOR_DB_DIR", os.path.expanduser("~/.local/share/skill-curator")
+)
 
-mcp = FastMCP("skill-curator", host="127.0.0.1", port=_port,
-              instructions="Skill lifecycle intelligence — semantic matching, feedback loop, gap detection, scout.")
+mcp = FastMCP(
+    "skill-curator",
+    host="127.0.0.1",
+    port=_port,
+    instructions="Skill lifecycle intelligence — semantic matching, feedback loop, gap detection, scout.",
+)
 
 _start_time = time.time()
 
@@ -41,6 +50,7 @@ def _get_db():
     global _db_instance
     if _db_instance is None:
         from skill_curator.db import Database
+
         os.makedirs(_db_dir, exist_ok=True)
         _db_instance = Database(os.path.join(_db_dir, "curator.db"))
     return _db_instance
@@ -49,15 +59,21 @@ def _get_db():
 def _get_encoder():
     global _encoder_instance
     if _encoder_instance is None:
-        os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")  # Force CPU — avoids crash on incompatible GPUs
+        os.environ.setdefault(
+            "CUDA_VISIBLE_DEVICES", ""
+        )  # Force CPU — avoids crash on incompatible GPUs
         from sentence_transformers import SentenceTransformer
-        model = os.environ.get("SKILL_CURATOR_MODEL", "paraphrase-multilingual-MiniLM-L12-v2")
+
+        model = os.environ.get(
+            "SKILL_CURATOR_MODEL", "paraphrase-multilingual-MiniLM-L12-v2"
+        )
         device = os.environ.get("SKILL_CURATOR_DEVICE", "cpu")
         inst = SentenceTransformer(model, device=device)
         # Expose model name for introspection by tests and tooling.
         inst.get_model_card = lambda: {"name": model}  # type: ignore[attr-defined]
         inst.__class__ = type(  # type: ignore[assignment]
-            inst.__class__.__name__, (inst.__class__,),
+            inst.__class__.__name__,
+            (inst.__class__,),
             {"__repr__": lambda self: f"SentenceTransformer({model})"},
         )
         _encoder_instance = inst
@@ -65,15 +81,27 @@ def _get_encoder():
 
 
 @mcp.tool()
-def skill_match(task: str, profile: list[str] | None = None, top_k: int = 3) -> list[dict]:
+def skill_match(
+    task: str, profile: list[str] | None = None, top_k: int = 3
+) -> list[dict]:
     """Match skills to a task description using semantic similarity."""
-    return _skill_match(task, db=_get_db(), encoder=_get_encoder(), profile=profile, top_k=top_k)
+    return _skill_match(
+        task, db=_get_db(), encoder=_get_encoder(), profile=profile, top_k=top_k
+    )
 
 
 @mcp.tool()
-def skill_feedback(name: str, outcome: str, session_id: str | None = None, task_description: str = "") -> dict:
+def skill_feedback(
+    name: str, outcome: str, session_id: str | None = None, task_description: str = ""
+) -> dict:
     """Record feedback for a skill usage and update effectiveness."""
-    return _skill_feedback(name, outcome=outcome, task_description=task_description, db=_get_db(), session_id=session_id)
+    return _skill_feedback(
+        name,
+        outcome=outcome,
+        task_description=task_description,
+        db=_get_db(),
+        session_id=session_id,
+    )
 
 
 @mcp.tool()
@@ -125,17 +153,36 @@ def get_onboarding_guide() -> dict:
 
 
 @mcp.tool()
-def skill_evolve(name: str, correction: str, task_description: str = "", section: str | None = None, dry_run: bool = True) -> dict:
+def skill_evolve(
+    name: str,
+    correction: str,
+    task_description: str = "",
+    section: str | None = None,
+    dry_run: bool = True,
+) -> dict:
     """Evolve a skill by applying a correction. Versions the original, rewrites content, resets effectiveness."""
-    return _skill_evolve(name, correction=correction, task_description=task_description,
-                         section=section, dry_run=dry_run, db=_get_db(),
-                         skills_dir=_skills_dir, encoder=_get_encoder())
+    return _skill_evolve(
+        name,
+        correction=correction,
+        task_description=task_description,
+        section=section,
+        dry_run=dry_run,
+        db=_get_db(),
+        skills_dir=_skills_dir,
+        encoder=_get_encoder(),
+    )
 
 
 @mcp.tool()
 def skill_rollback(name: str, version: str | None = None) -> dict:
     """Rollback a skill to a previous version from .versions/ directory."""
-    return _skill_rollback(name, version=version, db=_get_db(), skills_dir=_skills_dir, encoder=_get_encoder())
+    return _skill_rollback(
+        name,
+        version=version,
+        db=_get_db(),
+        skills_dir=_skills_dir,
+        encoder=_get_encoder(),
+    )
 
 
 # Keep decorator for backward compat (won't fire with manual ASGI, but costs nothing)
@@ -156,12 +203,14 @@ async def health_check(request):
         checks["db"] = {"status": "error", "detail": str(e)}
         status = "unhealthy"
     checks["model_loaded"] = _encoder_instance is not None
-    return JSONResponse({
-        "status": status,
-        "version": __version__,
-        "uptime_seconds": round(time.time() - _start_time),
-        "checks": checks,
-    })
+    return JSONResponse(
+        {
+            "status": status,
+            "version": __version__,
+            "uptime_seconds": round(time.time() - _start_time),
+            "checks": checks,
+        }
+    )
 
 
 def main():
@@ -173,7 +222,9 @@ def main():
 
     # Extract low-level Server from FastMCP (preserves all @mcp.tool registrations)
     server_instance = mcp._mcp_server
-    sm = StreamableHTTPSessionManager(app=server_instance, event_store=None, stateless=True)
+    sm = StreamableHTTPSessionManager(
+        app=server_instance, event_store=None, stateless=True
+    )
 
     _ctx = None
 

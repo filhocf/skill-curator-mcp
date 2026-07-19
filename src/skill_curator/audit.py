@@ -1,4 +1,5 @@
 """Skill quality auditing."""
+
 from __future__ import annotations
 
 import re
@@ -69,7 +70,7 @@ def audit_skill(path: Path) -> QualityReport:
             if ":" in line:
                 key, val = line.split(":", 1)
                 frontmatter[key.strip()] = val.strip().strip('"').strip("'")
-        body = content[fm_match.end():]
+        body = content[fm_match.end() :]
     else:
         issues.append("no_frontmatter")
 

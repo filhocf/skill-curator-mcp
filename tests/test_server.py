@@ -1,5 +1,4 @@
 """Tests for skill_curator.server — FastMCP server registration (phase 0.2.0 RED)."""
-import pytest
 
 from skill_curator.server import main, mcp
 

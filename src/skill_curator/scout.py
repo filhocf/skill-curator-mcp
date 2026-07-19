@@ -1,4 +1,5 @@
 """External skill discovery via GitHub search — multi-source with cache."""
+
 from __future__ import annotations
 
 import hashlib
@@ -37,7 +38,10 @@ def scout_skills(
         Dict with "skills" list, "message" string, and optionally "warnings" list.
     """
     if not query and not gaps_only:
-        return {"skills": [], "message": "Provide a query or set gaps_only=True to scout."}
+        return {
+            "skills": [],
+            "message": "Provide a query or set gaps_only=True to scout.",
+        }
 
     sources = sources or _DEFAULT_SOURCES
     warnings: list[str] = []
@@ -243,14 +247,19 @@ def _get_cached_legacy(db: Database) -> list[dict] | None:
     rows = cur.fetchall()
     if not rows:
         return None
-    return [{"source_url": r[0], "name": r[1], "description": r[2], "relevance_score": r[3]} for r in rows]
+    return [
+        {"source_url": r[0], "name": r[1], "description": r[2], "relevance_score": r[3]}
+        for r in rows
+    ]
 
 
 def _scouted_skill_exists(db: Database, source_url: str) -> bool:
     """Check if a scouted skill URL already exists in the DB."""
     if not source_url:
         return False
-    cur = db.conn.execute("SELECT 1 FROM scouted_skills WHERE source_url = ?", (source_url,))
+    cur = db.conn.execute(
+        "SELECT 1 FROM scouted_skills WHERE source_url = ?", (source_url,)
+    )
     return cur.fetchone() is not None
 
 
@@ -258,7 +267,12 @@ def _save_scouted_skill(db: Database, skill: dict) -> None:
     """Persist a scouted skill to the database."""
     db.conn.execute(
         "INSERT INTO scouted_skills (source_url, name, description, relevance_score, discovered_at) VALUES (?, ?, ?, ?, ?)",
-        (skill.get("source_url", ""), skill.get("name", ""), skill.get("description", ""),
-         skill.get("relevance_score", 0.5), datetime.utcnow().isoformat()),
+        (
+            skill.get("source_url", ""),
+            skill.get("name", ""),
+            skill.get("description", ""),
+            skill.get("relevance_score", 0.5),
+            datetime.utcnow().isoformat(),
+        ),
     )
     db.conn.commit()

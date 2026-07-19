@@ -1,4 +1,5 @@
 """Tests for skill_curator.indexer — filesystem scanning and embedding generation."""
+
 from pathlib import Path
 
 import pytest
@@ -20,14 +21,18 @@ def skills_dir(tmp_path: Path) -> Path:
         "---\ndescription: Build REST APIs\ntrigger: REST endpoint\n---\n# Python REST\nContent here."
     )
     (tmp_path / "subdir").mkdir()
-    (tmp_path / "subdir" / "testing.md").write_text("# Testing\nFirst line as description.")
+    (tmp_path / "subdir" / "testing.md").write_text(
+        "# Testing\nFirst line as description."
+    )
     return tmp_path
 
 
 class TestParseSkillMd:
     def test_with_frontmatter(self, tmp_path: Path) -> None:
         md = tmp_path / "skill.md"
-        md.write_text("---\ndescription: My skill\ntrigger: when X\n---\n# Title\nBody.")
+        md.write_text(
+            "---\ndescription: My skill\ntrigger: when X\n---\n# Title\nBody."
+        )
         result = parse_skill_md(md)
         assert result["description"] == "My skill"
         assert result["trigger"] == "when X"
@@ -50,7 +55,14 @@ class TestScanSkillsDir:
 
     def test_excludes_special_files(self, tmp_path: Path) -> None:
         """README.md, CHANGELOG.md, MEMORY.md, AGENTS.md, ARCHITECTURE.md, PRD.md excluded."""
-        for name in ["README.md", "CHANGELOG.md", "MEMORY.md", "AGENTS.md", "ARCHITECTURE.md", "PRD.md"]:
+        for name in [
+            "README.md",
+            "CHANGELOG.md",
+            "MEMORY.md",
+            "AGENTS.md",
+            "ARCHITECTURE.md",
+            "PRD.md",
+        ]:
             (tmp_path / name).write_text(f"# {name}")
         (tmp_path / "real-skill.md").write_text("# Real Skill\nContent.")
         found = scan_skills_dir(tmp_path)

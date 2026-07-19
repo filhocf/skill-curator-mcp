@@ -1,13 +1,14 @@
 """Tests for skill_curator.scout — external skill discovery (RED phase)."""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from skill_curator.db import Database
-from skill_curator.models import Skill, LifecycleState
+from skill_curator.models import Skill
 from skill_curator.scout import scout_skills
 
 
@@ -19,9 +20,22 @@ def db() -> Database:
 @pytest.fixture
 def db_with_gaps(db: Database) -> Database:
     """DB with skills that have gap_count > 0."""
-    db.upsert_skill(Skill(name="k8s-deploy", path="/s/k8s.md", description="Deploy to Kubernetes", gap_count=3))
-    db.upsert_skill(Skill(name="terraform", path="/s/tf.md", description="Terraform IaC", gap_count=1))
-    db.upsert_skill(Skill(name="python-rest", path="/s/py.md", description="REST APIs", gap_count=0))
+    db.upsert_skill(
+        Skill(
+            name="k8s-deploy",
+            path="/s/k8s.md",
+            description="Deploy to Kubernetes",
+            gap_count=3,
+        )
+    )
+    db.upsert_skill(
+        Skill(
+            name="terraform", path="/s/tf.md", description="Terraform IaC", gap_count=1
+        )
+    )
+    db.upsert_skill(
+        Skill(name="python-rest", path="/s/py.md", description="REST APIs", gap_count=0)
+    )
     return db
 
 
@@ -52,9 +66,19 @@ def _make_repo(name: str, url: str, description: str, has_readme: bool = True) -
 
 
 SAMPLE_REPOS = [
-    _make_repo("k8s-skills", "https://github.com/owner/k8s-skills", "Kubernetes deployment skills"),
-    _make_repo("docker-skills", "https://github.com/owner/docker-skills", "Docker container skills"),
-    _make_repo("ci-cd-skills", "https://github.com/owner/ci-cd-skills", "CI/CD pipeline skills"),
+    _make_repo(
+        "k8s-skills",
+        "https://github.com/owner/k8s-skills",
+        "Kubernetes deployment skills",
+    ),
+    _make_repo(
+        "docker-skills",
+        "https://github.com/owner/docker-skills",
+        "Docker container skills",
+    ),
+    _make_repo(
+        "ci-cd-skills", "https://github.com/owner/ci-cd-skills", "CI/CD pipeline skills"
+    ),
 ]
 
 
@@ -138,8 +162,13 @@ class TestScoutEdgeCases:
         db.conn.execute(
             "INSERT INTO scouted_skills (source_url, name, description, relevance_score, discovered_at) "
             "VALUES (?, ?, ?, ?, ?)",
-            ("https://github.com/owner/cached", "cached-skill", "A cached skill", 0.8,
-             datetime.utcnow().isoformat()),
+            (
+                "https://github.com/owner/cached",
+                "cached-skill",
+                "A cached skill",
+                0.8,
+                datetime.utcnow().isoformat(),
+            ),
         )
         db.conn.commit()
         result = scout_skills(query="anything", db=db)
@@ -152,6 +181,7 @@ class TestScoutEdgeCases:
     def test_scout_github_error_returns_empty(self, mock_httpx, db: Database) -> None:
         """httpx timeout/error → graceful empty result."""
         import httpx as real_httpx
+
         mock_httpx.get.side_effect = real_httpx.TimeoutException("timeout")
         result = scout_skills(query="deploy", db=db)
         assert result["skills"] == []
@@ -161,8 +191,15 @@ class TestScoutEdgeCases:
     def test_scout_filters_irrelevant(self, mock_httpx, db: Database) -> None:
         """Repos without README/SKILL.md are filtered out."""
         repos = [
-            _make_repo("good-repo", "https://github.com/o/good", "Has skills", has_readme=True),
-            _make_repo("bad-repo", "https://github.com/o/bad", "No skill files", has_readme=False),
+            _make_repo(
+                "good-repo", "https://github.com/o/good", "Has skills", has_readme=True
+            ),
+            _make_repo(
+                "bad-repo",
+                "https://github.com/o/bad",
+                "No skill files",
+                has_readme=False,
+            ),
         ]
         mock_httpx.get.return_value = _github_search_response(repos)
         result = scout_skills(query="skills", db=db)
@@ -216,11 +253,20 @@ def mock_httpx(monkeypatch):
     def mock_get(url, **kwargs):
         call_count["n"] += 1
         if "github.com" in url:
-            return MockResponse(json={"items": [
-                {"full_name": "user/skill-test", "html_url": "https://github.com/user/skill-test",
-                 "description": "A test skill for deployment automation", "has_readme": True,
-                 "topics": ["claude-code-skills"], "stargazers_count": 5}
-            ]})
+            return MockResponse(
+                json={
+                    "items": [
+                        {
+                            "full_name": "user/skill-test",
+                            "html_url": "https://github.com/user/skill-test",
+                            "description": "A test skill for deployment automation",
+                            "has_readme": True,
+                            "topics": ["claude-code-skills"],
+                            "stargazers_count": 5,
+                        }
+                    ]
+                }
+            )
         return MockResponse(json={"items": []})
 
     monkeypatch.setattr("skill_curator.scout.httpx.get", mock_get)
@@ -253,7 +299,13 @@ def db_with_gap_log(db: Database) -> Database:
     db.conn.execute(
         "INSERT INTO gap_log (timestamp, task_description, best_match_name, best_match_score, session_id) "
         "VALUES (?, ?, ?, ?, ?)",
-        (now, "deploy FastAPI to kubernetes with helm charts", "k8s-deploy", 0.4, "sess-1"),
+        (
+            now,
+            "deploy FastAPI to kubernetes with helm charts",
+            "k8s-deploy",
+            0.4,
+            "sess-1",
+        ),
     )
     db.conn.execute(
         "INSERT INTO gap_log (timestamp, task_description, best_match_name, best_match_score, session_id) "
@@ -282,8 +334,13 @@ class TestScoutMultiSource:
         query = "deploy kubernetes"
         query_hash = hashlib.sha256(query.encode()).hexdigest()
         cached_results = [
-            {"name": "cached-k8s", "source_url": "https://github.com/x/cached-k8s",
-             "description": "Cached skill", "source": "github", "relevance_score": 0.8}
+            {
+                "name": "cached-k8s",
+                "source_url": "https://github.com/x/cached-k8s",
+                "description": "Cached skill",
+                "source": "github",
+                "relevance_score": 0.8,
+            }
         ]
         now = time.time()
         db_with_cache.conn.execute(
@@ -301,7 +358,9 @@ class TestScoutMultiSource:
         assert len(result["skills"]) == 1
         assert result["skills"][0]["name"] == "cached-k8s"
 
-    def test_scout_cache_expired_refetches(self, db_with_cache: Database, mock_httpx) -> None:
+    def test_scout_cache_expired_refetches(
+        self, db_with_cache: Database, mock_httpx
+    ) -> None:
         """Expired cache entry → refetch from source."""
         import hashlib
         import json
@@ -310,15 +369,27 @@ class TestScoutMultiSource:
         query = "deploy kubernetes"
         query_hash = hashlib.sha256(query.encode()).hexdigest()
         expired_results = [
-            {"name": "old-cached", "source_url": "https://github.com/x/old",
-             "description": "Expired cached skill", "source": "github", "relevance_score": 0.5}
+            {
+                "name": "old-cached",
+                "source_url": "https://github.com/x/old",
+                "description": "Expired cached skill",
+                "source": "github",
+                "relevance_score": 0.5,
+            }
         ]
         now = time.time()
         # expires_at in the past
         db_with_cache.conn.execute(
             "INSERT INTO scout_cache (query_hash, query, results_json, source, fetched_at, expires_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (query_hash, query, json.dumps(expired_results), "github", now - 7200, now - 3600),
+            (
+                query_hash,
+                query,
+                json.dumps(expired_results),
+                "github",
+                now - 7200,
+                now - 3600,
+            ),
         )
         db_with_cache.conn.commit()
 
@@ -329,7 +400,9 @@ class TestScoutMultiSource:
         # Should have made at least one HTTP call (via mock_httpx fixture)
         assert mock_httpx["n"] >= 1
 
-    def test_scout_uses_gap_log_when_gaps_only(self, db_with_gap_log: Database, mock_httpx) -> None:
+    def test_scout_uses_gap_log_when_gaps_only(
+        self, db_with_gap_log: Database, mock_httpx
+    ) -> None:
         """gaps_only=True uses gap_log task_descriptions as queries (not just skill names)."""
         result = scout_skills(gaps_only=True, sources=["github"], db=db_with_gap_log)
         # The mock returns results for github.com URLs, so we should get results
@@ -343,7 +416,9 @@ class TestScoutMultiSource:
         result = scout_skills(query="deploy", sources=["github"], db=db)
         assert len(result["skills"]) > 0
         for skill in result["skills"]:
-            assert "source" in skill, f"Skill {skill.get('name')} missing 'source' field"
+            assert "source" in skill, (
+                f"Skill {skill.get('name')} missing 'source' field"
+            )
             assert skill["source"] in ("github", "awesome", "pypi", "web")
 
     def test_scout_result_has_relevance_score(self, db: Database, mock_httpx) -> None:
@@ -363,11 +438,20 @@ class TestScoutMultiSource:
             if "github.com" in url:
                 raise ConnectionError("GitHub is down")
             # Other sources return valid data
-            return MockResponse(json={"items": [
-                {"full_name": "alt/fallback-skill", "html_url": "https://other.com/alt/fallback-skill",
-                 "description": "A skill from alternate source", "has_readme": True,
-                 "topics": ["agent-skills"], "stargazers_count": 3}
-            ]})
+            return MockResponse(
+                json={
+                    "items": [
+                        {
+                            "full_name": "alt/fallback-skill",
+                            "html_url": "https://other.com/alt/fallback-skill",
+                            "description": "A skill from alternate source",
+                            "has_readme": True,
+                            "topics": ["agent-skills"],
+                            "stargazers_count": 3,
+                        }
+                    ]
+                }
+            )
 
         monkeypatch.setattr("skill_curator.scout.httpx.get", mock_get)
 
@@ -379,9 +463,11 @@ class TestScoutMultiSource:
     def test_scout_max_requests_limit(self, db: Database, mock_httpx) -> None:
         """Scout makes at most 10 HTTP requests total, regardless of query/source count."""
         # Use many sources to try to trigger >10 requests
-        result = scout_skills(
+        scout_skills(
             query="deploy kubernetes helm terraform docker ansible",
             sources=["github", "awesome", "pypi", "web"],
             db=db,
         )
-        assert mock_httpx["n"] <= 10, f"Made {mock_httpx['n']} HTTP requests, max allowed is 10"
+        assert mock_httpx["n"] <= 10, (
+            f"Made {mock_httpx['n']} HTTP requests, max allowed is 10"
+        )

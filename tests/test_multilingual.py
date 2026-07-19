@@ -3,7 +3,6 @@
 The encoder must use paraphrase-multilingual-MiniLM-L12-v2 (384 dims)
 to enable cross-language semantic matching.
 """
-import os
 
 import pytest
 
@@ -15,7 +14,11 @@ class TestMultilingualEncoder:
     def test_encoder_model_name(self) -> None:
         encoder = _get_encoder()
         # Model card name must be the multilingual variant
-        model_name = encoder.get_model_card()["name"] if hasattr(encoder, "get_model_card") else str(encoder)
+        model_name = (
+            encoder.get_model_card()["name"]
+            if hasattr(encoder, "get_model_card")
+            else str(encoder)
+        )
         assert "paraphrase-multilingual-MiniLM-L12-v2" in model_name
 
     def test_embedding_dimension_384(self) -> None:
@@ -31,7 +34,10 @@ class TestMultilingualEncoder:
         skill_vec = encoder.encode("deploy application to kubernetes")
 
         # Cosine similarity
-        sim = float(np.dot(query_vec, skill_vec) / (np.linalg.norm(query_vec) * np.linalg.norm(skill_vec)))
+        sim = float(
+            np.dot(query_vec, skill_vec)
+            / (np.linalg.norm(query_vec) * np.linalg.norm(skill_vec))
+        )
         assert sim > 0.4, f"Cross-language similarity too low: {sim}"
 
     def test_same_language_higher_score(self) -> None:
@@ -42,8 +48,14 @@ class TestMultilingualEncoder:
         query_en = encoder.encode("deploy application to kubernetes")
         query_pt = encoder.encode("implantar aplicação no kubernetes")
 
-        sim_en = float(np.dot(query_en, skill_vec) / (np.linalg.norm(query_en) * np.linalg.norm(skill_vec)))
-        sim_pt = float(np.dot(query_pt, skill_vec) / (np.linalg.norm(query_pt) * np.linalg.norm(skill_vec)))
+        sim_en = float(
+            np.dot(query_en, skill_vec)
+            / (np.linalg.norm(query_en) * np.linalg.norm(skill_vec))
+        )
+        sim_pt = float(
+            np.dot(query_pt, skill_vec)
+            / (np.linalg.norm(query_pt) * np.linalg.norm(skill_vec))
+        )
 
         assert sim_en > sim_pt, f"EN score ({sim_en}) should be > PT score ({sim_pt})"
 

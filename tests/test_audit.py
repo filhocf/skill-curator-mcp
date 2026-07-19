@@ -1,4 +1,5 @@
 """Tests for skill_curator.audit — skill quality auditing."""
+
 from pathlib import Path
 
 import pytest
@@ -62,25 +63,35 @@ class TestAuditSkill:
 
     def test_no_frontmatter_penalizes(self, tmp_path: Path) -> None:
         p = tmp_path / "no-fm.md"
-        p.write_text("# No frontmatter\n\nJust a body with enough content to not trigger too_short." * 5)
+        p.write_text(
+            "# No frontmatter\n\nJust a body with enough content to not trigger too_short."
+            * 5
+        )
         report = audit_skill(p)
         assert "no_frontmatter" in report.issues
 
     def test_no_description_penalizes(self, tmp_path: Path) -> None:
         p = tmp_path / "no-desc.md"
-        p.write_text("---\ntrigger: when X happens\n---\n# Title\n\nBody content here." * 5)
+        p.write_text(
+            "---\ntrigger: when X happens\n---\n# Title\n\nBody content here." * 5
+        )
         report = audit_skill(p)
         assert "no_description" in report.issues
 
     def test_no_trigger_penalizes(self, tmp_path: Path) -> None:
         p = tmp_path / "no-trigger.md"
-        p.write_text("---\ndescription: A valid description\n---\n# Title\n\nBody content." * 5)
+        p.write_text(
+            "---\ndescription: A valid description\n---\n# Title\n\nBody content." * 5
+        )
         report = audit_skill(p)
         assert "no_trigger" in report.issues
 
     def test_generic_description_penalizes(self, tmp_path: Path) -> None:
         p = tmp_path / "generic.md"
-        p.write_text("---\ndescription: \"Skill: does something\"\ntrigger: when X\n---\n# Title\n\nBody." * 5)
+        p.write_text(
+            '---\ndescription: "Skill: does something"\ntrigger: when X\n---\n# Title\n\nBody.'
+            * 5
+        )
         report = audit_skill(p)
         assert "generic_description" in report.issues
 
@@ -92,12 +103,17 @@ class TestAuditSkill:
 
     def test_too_long_penalizes(self, tmp_path: Path) -> None:
         p = tmp_path / "long.md"
-        p.write_text("---\ndescription: Valid\ntrigger: when X\n---\n# Long\n" + "x" * 5001)
+        p.write_text(
+            "---\ndescription: Valid\ntrigger: when X\n---\n# Long\n" + "x" * 5001
+        )
         report = audit_skill(p)
         assert "too_long" in report.issues
 
     def test_has_when_to_use_section_bonus(self, tmp_path: Path) -> None:
-        base = "---\ndescription: Valid\ntrigger: when X\n---\n# Skill\n\nFiller content.\n" * 3
+        base = (
+            "---\ndescription: Valid\ntrigger: when X\n---\n# Skill\n\nFiller content.\n"
+            * 3
+        )
         p_with = tmp_path / "with-when.md"
         p_with.write_text(base + "\n## Quando usar\n\nUse when you need Y.\n")
         p_without = tmp_path / "without-when.md"
@@ -107,7 +123,10 @@ class TestAuditSkill:
         assert report_with.score > report_without.score
 
     def test_has_steps_section_bonus(self, tmp_path: Path) -> None:
-        base = "---\ndescription: Valid\ntrigger: when X\n---\n# Skill\n\nFiller content.\n" * 3
+        base = (
+            "---\ndescription: Valid\ntrigger: when X\n---\n# Skill\n\nFiller content.\n"
+            * 3
+        )
         p_with = tmp_path / "with-steps.md"
         p_with.write_text(base + "\n## Steps\n\n1. Do A\n2. Do B\n")
         p_without = tmp_path / "without-steps.md"
@@ -119,7 +138,9 @@ class TestAuditSkill:
 
 class TestAuditAll:
     def test_audit_all_returns_list(self, tmp_path: Path) -> None:
-        (tmp_path / "a.md").write_text("---\ndescription: A\ntrigger: t\n---\n# A\nContent." * 5)
+        (tmp_path / "a.md").write_text(
+            "---\ndescription: A\ntrigger: t\n---\n# A\nContent." * 5
+        )
         (tmp_path / "b.md").write_text("# B\nMinimal.")
         results = audit_all(tmp_path)
         assert isinstance(results, list)
