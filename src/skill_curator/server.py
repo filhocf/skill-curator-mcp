@@ -82,11 +82,11 @@ def _get_encoder():
 
 @mcp.tool()
 def skill_match(
-    task: str, profile: list[str] | None = None, top_k: int = 3
+    task: str, profile: list[str] | None = None, top_k: int = 3, session_id: str | None = None
 ) -> list[dict]:
     """Match skills to a task description using semantic similarity."""
     return _skill_match(
-        task, db=_get_db(), encoder=_get_encoder(), profile=profile, top_k=top_k
+        task, db=_get_db(), encoder=_get_encoder(), profile=profile, top_k=top_k, session_id=session_id
     )
 
 

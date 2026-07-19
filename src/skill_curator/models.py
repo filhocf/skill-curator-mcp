@@ -53,7 +53,7 @@ class FeedbackEntry:
     created_at: Optional[str] = None
 
     def __post_init__(self) -> None:
-        valid = {"success", "partial", "failure"}
+        valid = {"success", "partial", "failure", "irrelevant"}
         if self.outcome not in valid:
             raise ValueError(f"Invalid outcome: {self.outcome}. Must be one of {valid}")
 

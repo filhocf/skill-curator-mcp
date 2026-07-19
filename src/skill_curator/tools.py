@@ -16,7 +16,7 @@ from skill_curator.scoring import (
 )
 
 _EMA_ALPHA = 0.3
-_OUTCOME_VALUES = {"success": 1.0, "partial": 0.5, "failure": 0.0}
+_OUTCOME_VALUES = {"success": 1.0, "partial": 0.5, "failure": 0.0, "irrelevant": 0.5}
 _STALE_DAYS = 30
 _ARCHIVE_DAYS = 90
 
