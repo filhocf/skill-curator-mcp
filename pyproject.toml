@@ -1,16 +1,33 @@
 [project]
 name = "skill-curator-mcp"
-version = "0.1.2"
+version = "0.2.0"
 description = "Skill lifecycle intelligence MCP — semantic matching, feedback loop, gap detection, scout"
 authors = [{name = "Claudio Ferreira Filho", email = "claudio.filho@dataprev.gov.br"}]
 license = {text = "Apache-2.0"}
+readme = "README.md"
 requires-python = ">=3.11"
+keywords = ["mcp", "skills", "ai-agent", "lifecycle", "curator", "semantic-search"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "mcp>=1.9.0",
     "sqlite-vec>=0.1.6",
     "sentence-transformers>=3.0.0",
     "httpx>=0.27.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/filhocf/skill-curator-mcp"
+Repository = "https://github.com/filhocf/skill-curator-mcp"
+Issues = "https://github.com/filhocf/skill-curator-mcp/issues"
+Changelog = "https://github.com/filhocf/skill-curator-mcp/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [
