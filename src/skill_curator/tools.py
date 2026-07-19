@@ -16,7 +16,7 @@ _STALE_DAYS = 30
 _ARCHIVE_DAYS = 90
 
 
-def skill_match(task: str, *, db: Database, encoder: Any, profile: list[str] | None = None, top_k: int = 3) -> list[dict]:
+def skill_match(task: str, *, db: Database, encoder: Any, profile: list[str] | None = None, top_k: int = 3, session_id: str | None = None) -> list[dict]:
     """Match skills to a task using semantic similarity + composite scoring."""
     query_vec = encoder.encode(task)
     results = db.search_similar(query_vec, limit=top_k * 3)
@@ -34,7 +34,48 @@ def skill_match(task: str, *, db: Database, encoder: Any, profile: list[str] | N
         scored.append({"name": name, "score": round(score, 4), "description": skill.description})
 
     scored.sort(key=lambda x: x["score"], reverse=True)
-    return scored[:top_k]
+    scored = scored[:top_k]
+
+    HIGH_THRESHOLD = 0.7
+    LOW_THRESHOLD = 0.5
+
+    best_score = scored[0]["score"] if scored else 0.0
+    best_name = scored[0]["name"] if scored else None
+
+    if best_score < LOW_THRESHOLD:
+        # Gap detected
+        suggested_name = task.lower().replace(" ", "-")[:50]
+        suggestion = {
+            "gap_detected": True,
+            "improvement_opportunity": False,
+            "closest_match": {"name": best_name, "score": best_score} if best_name else None,
+            "suggested_action": "create_new",
+            "suggested_name": suggested_name,
+        }
+        # Increment gap_count on closest match
+        if best_name:
+            db.conn.execute("UPDATE skills SET gap_count = gap_count + 1 WHERE name = ?", (best_name,))
+            db.conn.commit()
+        # Log to gap_log
+        db.add_gap_log(task_description=task, best_match_name=best_name, best_match_score=best_score, session_id=session_id)
+        # Attach suggestion to first result or as standalone
+        if scored:
+            scored[0]["suggestion"] = suggestion
+        else:
+            scored = [{"name": None, "score": 0.0, "suggestion": suggestion}]
+
+    elif best_score < HIGH_THRESHOLD:
+        # Improvement opportunity
+        suggestion = {
+            "gap_detected": False,
+            "improvement_opportunity": True,
+            "closest_match": {"name": best_name, "score": best_score},
+            "suggested_action": "evolve_existing",
+        }
+        scored[0]["suggestion"] = suggestion
+    # else: score >= HIGH_THRESHOLD, no suggestion
+
+    return scored
 
 
 def skill_feedback(name: str, *, outcome: str, task_description: str = "", db: Database, session_id: str | None = None) -> dict:
@@ -58,19 +99,98 @@ def skill_feedback(name: str, *, outcome: str, task_description: str = "", db: D
     return {"name": name, "new_effectiveness": round(new_eff, 6), "total_uses": skill.total_uses + 1}
 
 
-def skill_gaps(*, db: Database, session_id: str | None = None) -> list[dict]:
-    """Return skills with gap_count > 0 or no recent use."""
+def skill_gaps(*, db: Database, correlate: bool = False, encoder: Any = None, session_id: str | None = None) -> list[dict] | dict:
+    """Return skills with gap_count > 0 or no recent use. With correlate=True, cluster gap_log patterns."""
     cutoff = (datetime.utcnow() - timedelta(days=_STALE_DAYS)).isoformat()
     all_skills = db.list_skills()
-    gaps = []
+    known_gaps = []
     for s in all_skills:
         if s.state == LifecycleState.ARCHIVED:
             continue
         has_gap = s.gap_count > 0
         stale_use = s.last_used_at is not None and s.last_used_at < cutoff
         if has_gap or stale_use:
-            gaps.append({"name": s.name, "gap_count": s.gap_count, "last_used_at": s.last_used_at})
-    return gaps
+            known_gaps.append({"name": s.name, "gap_count": s.gap_count, "last_used_at": s.last_used_at})
+
+    if not correlate:
+        return known_gaps  # backward compatible
+
+    # Correlation: cluster gap_log entries by semantic similarity
+    entries = db.get_gap_log(session_id=session_id)
+    detected_patterns = []
+
+    if entries and encoder is not None:
+        clusters = _cluster_gap_entries(entries, encoder, threshold=0.8)
+        for cluster in clusters:
+            if len(cluster) >= 3:
+                avg_score = sum(e["best_match_score"] or 0 for e in cluster) / len(cluster)
+                detected_patterns.append({
+                    "theme": cluster[0]["task_description"],  # representative
+                    "occurrences": len(cluster),
+                    "first_seen": cluster[-1]["timestamp"],  # oldest (ordered DESC)
+                    "last_seen": cluster[0]["timestamp"],  # newest
+                    "sample_tasks": [e["task_description"] for e in cluster[:3]],
+                    "closest_existing_skill": cluster[0].get("best_match_name"),
+                    "recommended_action": _determine_action(avg_score),
+                    "actionable": True,
+                })
+
+    recommendations = [p for p in detected_patterns if p["actionable"]]
+
+    return {
+        "known_gaps": known_gaps,
+        "detected_patterns": detected_patterns,
+        "recommendations": recommendations,
+    }
+
+
+def _determine_action(avg_score: float) -> str:
+    """Determine recommended action based on average match score."""
+    if avg_score < 0.3:
+        return "create_skill"
+    elif avg_score < 0.6:
+        return "evolve_skill"
+    else:
+        return "scout_external"
+
+
+def _cluster_gap_entries(entries: list[dict], encoder: Any, threshold: float = 0.8) -> list[list[dict]]:
+    """Cluster gap_log entries by semantic similarity using greedy approach."""
+    if not entries:
+        return []
+
+    # Generate embeddings for all entries
+    embeddings = [encoder.encode(e["task_description"]) for e in entries]
+
+    # Greedy clustering: assign each entry to first cluster with similarity >= threshold
+    clusters: list[list[int]] = []  # list of lists of indices
+
+    for i, emb in enumerate(embeddings):
+        assigned = False
+        for cluster in clusters:
+            # Compare with first entry in cluster (representative)
+            rep_emb = embeddings[cluster[0]]
+            sim = _cosine_similarity(emb, rep_emb)
+            if sim >= threshold:
+                cluster.append(i)
+                assigned = True
+                break
+        if not assigned:
+            clusters.append([i])
+
+    # Convert indices back to entries
+    return [[entries[i] for i in cluster] for cluster in clusters]
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Compute cosine similarity between two vectors."""
+    import math
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(x * x for x in b))
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
 
 
 def skill_lifecycle(*, db: Database) -> dict:
@@ -154,38 +274,109 @@ def skill_auto_maintain(*, db: Database) -> dict:
     return {"staled": staled, "archived": archived}
 
 
-def get_onboarding_guide() -> dict:
-    """Return onboarding guide for MCP clients."""
-    return {
-        "quick_start": "Call skill_match before each task to get relevant skills.",
-        "integration_cycle": {
-            "1_startup": "skill_reindex() — rescan skills dir, update embeddings",
-            "2_each_task": "skill_match(task='summary') — if score > 0.5, read and follow the skill",
-            "3_post_task": "skill_feedback(name='skill', outcome='success|partial|failure') — improves future matching",
-            "4_shutdown": "skill_gaps() — detect tasks that had no matching skill",
-            "5_weekly": "skill_lifecycle() — review promote/archive candidates",
+def get_onboarding_guide(verbosity: str = "full", *, db: "Database | None" = None) -> dict:
+    """Get integration guide for using the skill-curator MCP.
+    
+    Args:
+        verbosity: "full" (default) or "compact"
+        db: Optional database reference (not currently used but accepted for future)
+    """
+    guide = {
+        "version": "2.0",
+        "lifecycle": "match → use → feedback → gaps → scout → evolve",
+        "integration_protocol": {
+            "startup": {
+                "action": "skill_gaps(correlate=true)",
+                "purpose": "Load pending gaps, present actionable patterns to user",
+                "frequency": "every session"
+            },
+            "pre_task": {
+                "action": "skill_match(task='...')",
+                "purpose": "Find relevant skill before acting",
+                "interpret": {
+                    "score >= 0.7": "Strong match. Read skill file and follow it.",
+                    "0.5 <= score < 0.7": "Partial match. Follow but note improvement opportunity.",
+                    "score < 0.5": "No match. Gap detected and logged. Proceed without skill."
+                }
+            },
+            "post_task": {
+                "action": "skill_feedback(name='...', outcome='success|failure', task_description='...')",
+                "purpose": "Update skill effectiveness score via EMA",
+                "frequency": "after each skill use"
+            },
+            "shutdown": {
+                "actions": [
+                    "skill_feedback (batch from session log)",
+                    "skill_gaps(correlate=true) — present patterns to user",
+                    "suggest scout/evolve if actionable pattern >= 3 occurrences"
+                ]
+            },
+            "weekly": {
+                "action": "skill_audit()",
+                "purpose": "Full health check: stale (>30d), unused, low-effectiveness (<0.3)"
+            }
         },
-        "system_prompt_example": (
-            "## Skills\n"
-            "Before implementing any task, call `skill_match(task=\"summary\")`.\n"
-            "If score > 0.5: read the skill and follow it.\n"
-            "After using a skill: `skill_feedback(name=\"skill\", outcome=\"success|failure\")`."
-        ),
-        "tools": [
-            {"name": "skill_match", "description": "Semantic skill matching for a task"},
-            {"name": "skill_feedback", "description": "Record outcome feedback for a skill"},
-            {"name": "skill_gaps", "description": "Detect skill gaps and stale skills"},
-            {"name": "skill_lifecycle", "description": "Get lifecycle status overview"},
-            {"name": "skill_promote", "description": "Promote a skill to active"},
-            {"name": "skill_archive", "description": "Archive a skill"},
-            {"name": "skill_reindex", "description": "Reindex skills from filesystem"},
-            {"name": "skill_scout", "description": "Scout for external skills"},
-            {"name": "get_onboarding_guide", "description": "This guide"},
-        ],
-        "protocol": "StreamableHTTP on localhost",
-        "scoring": "0.6*similarity + 0.2*effectiveness + 0.2*profile_match; EMA α=0.3",
-        "notes": "Feedback is critical: without it, effectiveness stays at 0.5 (default) and matching never improves.",
+        "thresholds": {
+            "SKILL_MATCH_HIGH_THRESHOLD": {"default": 0.7, "meaning": "Above = strong match, no suggestion"},
+            "SKILL_MATCH_LOW_THRESHOLD": {"default": 0.5, "meaning": "Below = gap detected and logged"},
+            "GAP_ACTIONABLE_COUNT": {"default": 3, "meaning": "Gap occurrences to flag as actionable"},
+            "SCOUT_AUTO_TRIGGER": {"default": 5, "meaning": "Gap occurrences to auto-trigger scout"},
+            "STALE_DAYS": {"default": 30, "meaning": "Days without use to mark stale"},
+            "ARCHIVE_DAYS": {"default": 90, "meaning": "Days stale before auto-archive candidate"}
+        },
+        "scoring_formula": "0.6*similarity + 0.2*effectiveness + 0.2*profile_match; EMA α=0.3"
     }
+
+    if verbosity == "full":
+        guide["tools"] = {
+            "skill_match": {
+                "when": "Before every significant task",
+                "params": {"task": "string", "top_k": "int (default 3)", "profile": "list[str] optional"},
+                "returns": "Top skills with score + suggestion field"
+            },
+            "skill_feedback": {
+                "when": "After using a skill (or at shutdown batch)",
+                "params": {"name": "skill name", "outcome": "success|failure|partial", "task_description": "context"},
+                "returns": "Updated effectiveness score"
+            },
+            "skill_gaps": {
+                "when": "Startup + shutdown",
+                "params": {"correlate": "bool (default false)", "encoder": "embedding encoder"},
+                "returns": "known_gaps + detected_patterns (if correlate=true)"
+            },
+            "skill_scout": {
+                "when": "When gap is recurrent (>=5) or on demand",
+                "params": {"query": "search terms", "gaps_only": "bool"},
+                "returns": "External skill references with relevance score"
+            },
+            "skill_evolve": {
+                "when": "User explicitly approves skill evolution",
+                "params": {"name": "skill to evolve", "context": "what needs improvement"},
+                "returns": "New version of the skill"
+            },
+            "skill_lifecycle": {
+                "when": "On demand — lifecycle overview",
+                "params": {},
+                "returns": "Status overview with promotion/archive candidates"
+            },
+            "skill_audit": {
+                "when": "Weekly (first session of the week)",
+                "params": {},
+                "returns": "Health report: stale, unused, low-effectiveness, pending gaps"
+            },
+            "skill_reindex": {
+                "when": "After adding/modifying skill files on disk",
+                "params": {"skills_dir": "path (optional)"},
+                "returns": "Count of indexed skills"
+            },
+            "get_onboarding_guide": {
+                "when": "First interaction or when needing protocol reference",
+                "params": {"verbosity": "full|compact"},
+                "returns": "This guide"
+            }
+        }
+
+    return guide
 
 
 def skill_audit(*, skills_dir: str | None = None) -> list[dict]:
@@ -198,122 +389,3 @@ def skill_audit(*, skills_dir: str | None = None) -> list[dict]:
         skills_dir = os.environ.get("SKILL_CURATOR_SKILLS_DIR", os.path.expanduser("~/.kiro/skills"))
     reports = audit_all(Path(skills_dir))
     return [dataclasses.asdict(r) for r in reports]
-
-
-def skill_evolve(
-    name: str,
-    *,
-    correction: str,
-    task_description: str = "",
-    section: str | None = None,
-    dry_run: bool = True,
-    db: "Database",
-    skills_dir: str,
-    encoder: Any = None,
-) -> dict:
-    """Evolve a skill by applying a correction to its content.
-
-    Returns diff summary. If dry_run=False, writes the change and versions the original.
-    """
-    from skill_curator.evolution import (
-        apply_evolution,
-        check_evolve_eligibility,
-        log_evolution,
-        save_version,
-        write_evolved_skill,
-    )
-
-    skill = db.get_skill(name)
-    if not skill:
-        return {"error": f"Skill '{name}' not found in database."}
-
-    skill_path = Path(skill.path)
-    if not skill_path.exists():
-        return {"error": f"Skill file not found: {skill_path}"}
-
-    # Check eligibility (min failures + cooldown)
-    eligibility_error = check_evolve_eligibility(name, db)
-    if eligibility_error and not dry_run:
-        return {"error": eligibility_error, "hint": "Use dry_run=True to preview without eligibility check."}
-
-    # Apply evolution
-    try:
-        original, new_content = apply_evolution(skill_path, correction, section)
-    except ValueError as e:
-        return {"error": str(e)}
-
-    # Generate diff summary
-    orig_lines = original.splitlines()
-    new_lines = new_content.splitlines()
-    added = len([l for l in new_lines if l not in orig_lines])
-    removed = len([l for l in orig_lines if l not in new_lines])
-    diff_summary = f"+{added}/-{removed} lines. Section: {section or 'append'}. Correction: {correction[:100]}"
-
-    if dry_run:
-        return {
-            "applied": False,
-            "dry_run": True,
-            "diff_summary": diff_summary,
-            "preview_lines": new_content.splitlines()[-10:],
-        }
-
-    # Write version + evolve + log + reset effectiveness + reindex
-    version_path = save_version(skill_path, original)
-    write_evolved_skill(skill_path, new_content)
-    log_evolution(db, name, correction, task_description, section, diff_summary, version_path)
-    db.update_effectiveness(name, 0.5)  # Reset — skill must prove itself again
-
-    # Reindex if encoder available
-    if encoder:
-        from skill_curator.tools import skill_reindex as _reindex
-        _reindex(skills_dir=skills_dir, db=db, encoder=encoder)
-
-    return {
-        "applied": True,
-        "diff_summary": diff_summary,
-        "version_path": version_path,
-        "effectiveness_reset": True,
-    }
-
-
-def skill_rollback(name: str, *, version: str | None = None, db: "Database", skills_dir: str, encoder: Any = None) -> dict:
-    """Rollback a skill to a previous version.
-
-    If version is None, restores the latest version.
-    """
-    from skill_curator.evolution import get_latest_version
-
-    import os
-    if skills_dir is None:
-        skills_dir = os.environ.get("SKILL_CURATOR_SKILLS_DIR", os.path.expanduser("~/.kiro/skills"))
-
-    skill = db.get_skill(name)
-    if not skill:
-        return {"error": f"Skill '{name}' not found."}
-
-    skill_path = Path(skill.path)
-
-    if version:
-        version_path = Path(version)
-    else:
-        latest = get_latest_version(skill_path)
-        if not latest:
-            return {"error": f"No versions found for skill '{name}'."}
-        version_path = Path(latest)
-
-    if not version_path.exists():
-        return {"error": f"Version file not found: {version_path}"}
-
-    # Restore
-    restored_content = version_path.read_text(encoding="utf-8")
-    skill_path.write_text(restored_content, encoding="utf-8")
-
-    # Reset effectiveness
-    db.update_effectiveness(name, 0.5)
-
-    # Reindex if encoder available
-    if encoder:
-        from skill_curator.tools import skill_reindex as _reindex
-        _reindex(skills_dir=skills_dir, db=db, encoder=encoder)
-
-    return {"restored": True, "from": str(version_path), "effectiveness_reset": True}

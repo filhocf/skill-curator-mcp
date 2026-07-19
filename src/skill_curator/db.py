@@ -59,6 +59,25 @@ CREATE TABLE IF NOT EXISTS scouted_skills (
     status TEXT DEFAULT 'new',
     discovered_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS gap_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp REAL NOT NULL,
+    task_description TEXT NOT NULL,
+    best_match_name TEXT,
+    best_match_score REAL,
+    session_id TEXT,
+    resolved INTEGER DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS scout_cache (
+    query_hash TEXT PRIMARY KEY,
+    query TEXT NOT NULL,
+    results_json TEXT NOT NULL,
+    source TEXT NOT NULL,
+    fetched_at REAL NOT NULL,
+    expires_at REAL NOT NULL
+);
 """
 
 _VEC_SCHEMA = """
@@ -184,6 +203,32 @@ class Database:
             (blob, limit),
         )
         return [(row[0], row[1]) for row in cur.fetchall()]
+
+    def add_gap_log(self, task_description: str, best_match_name: str | None, best_match_score: float, session_id: str | None = None) -> None:
+        """Log a gap detection."""
+        import time
+        self.conn.execute(
+            """INSERT INTO gap_log (timestamp, task_description, best_match_name, best_match_score, session_id, resolved)
+               VALUES (?, ?, ?, ?, ?, 0)""",
+            (time.time(), task_description, best_match_name, best_match_score, session_id),
+        )
+        self.conn.commit()
+
+    def get_gap_log(self, session_id: str | None = None) -> list[dict]:
+        """Get gap log entries, optionally filtered by session_id. Ordered by timestamp DESC."""
+        if session_id is not None:
+            cur = self.conn.execute(
+                "SELECT id, timestamp, task_description, best_match_name, best_match_score, session_id, resolved "
+                "FROM gap_log WHERE session_id = ? ORDER BY timestamp DESC",
+                (session_id,),
+            )
+        else:
+            cur = self.conn.execute(
+                "SELECT id, timestamp, task_description, best_match_name, best_match_score, session_id, resolved "
+                "FROM gap_log ORDER BY timestamp DESC"
+            )
+        cols = ["id", "timestamp", "task_description", "best_match_name", "best_match_score", "session_id", "resolved"]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
 
     def _row_to_skill(self, row: tuple) -> Skill:
         """Convert a DB row to a Skill dataclass."""
