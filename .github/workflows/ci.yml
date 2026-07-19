@@ -29,4 +29,10 @@ jobs:
           version: "latest"
       - run: uv venv .venv
       - run: uv pip install -e ".[dev]" pytest-cov
-      - run: .venv/bin/pytest tests/ -v --cov=skill_curator --cov-report=term-missing --cov-fail-under=70
+      - run: .venv/bin/pytest tests/ -v --cov=skill_curator --cov-report=xml --cov-report=term-missing --cov-fail-under=70
+      - name: Upload coverage to Codecov
+        if: always()
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false
