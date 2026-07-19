@@ -105,9 +105,9 @@ def skill_feedback(
 
 
 @mcp.tool()
-def skill_gaps(session_id: str | None = None) -> list[dict]:
+def skill_gaps(session_id: str | None = None, correlate: bool = False) -> list[dict] | dict:
     """Detect skill gaps — skills with gap_count > 0 or no recent use."""
-    return _skill_gaps(db=_get_db(), session_id=session_id)
+    return _skill_gaps(db=_get_db(), session_id=session_id, correlate=correlate, encoder=_get_encoder())
 
 
 @mcp.tool()
