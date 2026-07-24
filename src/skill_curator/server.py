@@ -70,6 +70,7 @@ def _get_encoder():
         )
         device = os.environ.get("SKILL_CURATOR_DEVICE", "cpu")
         inst = SentenceTransformer(model, device=device)
+        inst.max_seq_length = 512  # Default is 128 — too short for skill matching
         # Expose model name for introspection by tests and tooling.
         inst.get_model_card = lambda: {"name": model}  # type: ignore[attr-defined]
         inst.__class__ = type(  # type: ignore[assignment]
