@@ -9,9 +9,9 @@ import json
 
 import pytest
 
-from skill_curator.profile import load_profile
 from skill_curator.db import Database
 from skill_curator.models import LifecycleState, Skill
+from skill_curator.profile import load_profile
 from skill_curator.tools import skill_match
 
 

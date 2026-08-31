@@ -1,6 +1,6 @@
 """Tests for skill_curator.evolution — evolution module unit tests."""
 
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -37,14 +37,14 @@ def _seed_failures(db: Database, name: str, count: int) -> None:
     for i in range(count):
         db.conn.execute(
             "INSERT INTO feedback_log (skill_name, outcome, task_description, created_at) VALUES (?, 'failure', 'task', ?)",
-            (name, datetime.now(timezone.utc).isoformat()),
+            (name, datetime.now(UTC).isoformat()),
         )
     db.conn.commit()
 
 
 def _seed_evolution(db: Database, name: str, hours_ago: float) -> None:
     """Insert an evolution record N hours ago."""
-    evolved_at = (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).isoformat()
+    evolved_at = (datetime.now(UTC) - timedelta(hours=hours_ago)).isoformat()
     db.conn.execute(
         "INSERT INTO skill_evolutions (skill_name, evolved_at, correction) VALUES (?, ?, 'fix')",
         (name, evolved_at),
