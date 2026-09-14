@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
 
 
 class LifecycleState(Enum):
@@ -22,17 +21,17 @@ class Skill:
 
     name: str
     path: str
-    description: Optional[str] = None
-    trigger_text: Optional[str] = None
+    description: str | None = None
+    trigger_text: str | None = None
     effectiveness: float = 0.5
     total_uses: int = 0
     total_successes: int = 0
     gap_count: int = 0
     state: LifecycleState | str = LifecycleState.ACTIVE
-    profile_tags: Optional[str] = None
-    last_used_at: Optional[str] = None
-    last_indexed_at: Optional[str] = None
-    created_at: Optional[str] = None
+    profile_tags: str | None = None
+    last_used_at: str | None = None
+    last_indexed_at: str | None = None
+    created_at: str | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.state, str):
@@ -49,8 +48,8 @@ class FeedbackEntry:
     skill_name: str
     outcome: str
     task_description: str
-    session_id: Optional[str] = None
-    created_at: Optional[str] = None
+    session_id: str | None = None
+    created_at: str | None = None
 
     def __post_init__(self) -> None:
         valid = {"success", "partial", "failure", "irrelevant"}
@@ -64,8 +63,8 @@ class ScoutedSkill:
 
     source_url: str
     name: str
-    description: Optional[str] = None
-    relevance_score: Optional[float] = None
-    matched_gap: Optional[str] = None
+    description: str | None = None
+    relevance_score: float | None = None
+    matched_gap: str | None = None
     status: str = "new"
-    discovered_at: Optional[str] = None
+    discovered_at: str | None = None

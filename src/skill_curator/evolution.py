@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import re
 import fcntl
-from datetime import datetime, timezone
+import re
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 
 def check_evolve_eligibility(
-    name: str, db: "Database", min_failures: int = 2, cooldown_hours: float = 1.0
+    name: str, db: Database, min_failures: int = 2, cooldown_hours: float = 1.0
 ) -> str | None:
     """Check if a skill is eligible for evolution.
 
@@ -39,7 +39,7 @@ def check_evolve_eligibility(
     ).fetchone()
     if rows:
         last_evolved = datetime.fromisoformat(rows[0])
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         hours_since = (now - last_evolved).total_seconds() / 3600
         if hours_since < cooldown_hours:
             return f"Skill '{name}' was evolved {hours_since:.1f}h ago. Cooldown: {cooldown_hours}h."
@@ -91,7 +91,7 @@ def save_version(skill_path: Path, content: str) -> str:
     versions_dir = skill_path.parent / ".versions"
     versions_dir.mkdir(exist_ok=True)
 
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
+    timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H-%M-%S")
     version_name = f"{skill_path.stem}.{timestamp}.md"
     version_path = versions_dir / version_name
 
@@ -108,7 +108,7 @@ def write_evolved_skill(skill_path: Path, new_content: str) -> None:
 
 
 def log_evolution(
-    db: "Database",
+    db: Database,
     skill_name: str,
     correction: str,
     task_description: str,
@@ -124,7 +124,7 @@ def log_evolution(
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             skill_name,
-            datetime.now(timezone.utc).isoformat(),
+            datetime.now(UTC).isoformat(),
             correction,
             task_description,
             section,

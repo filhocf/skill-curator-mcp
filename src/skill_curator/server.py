@@ -10,16 +10,38 @@ from mcp.server.fastmcp import FastMCP
 from skill_curator.scout import scout_ingest as _scout_ingest
 from skill_curator.tools import (
     get_onboarding_guide as _get_onboarding_guide,
+)
+from skill_curator.tools import (
     skill_archive as _skill_archive,
+)
+from skill_curator.tools import (
     skill_audit as _skill_audit,
+)
+from skill_curator.tools import (
     skill_evolve as _skill_evolve,
+)
+from skill_curator.tools import (
     skill_feedback as _skill_feedback,
+)
+from skill_curator.tools import (
     skill_gaps as _skill_gaps,
+)
+from skill_curator.tools import (
     skill_lifecycle as _skill_lifecycle,
+)
+from skill_curator.tools import (
     skill_match as _skill_match,
+)
+from skill_curator.tools import (
     skill_promote as _skill_promote,
+)
+from skill_curator.tools import (
     skill_reindex as _skill_reindex,
+)
+from skill_curator.tools import (
     skill_rollback as _skill_rollback,
+)
+from skill_curator.tools import (
     skill_scout as _skill_scout,
 )
 
@@ -215,6 +237,7 @@ def skill_scout_ingest(source_url: str, target_skill: str | None = None) -> dict
 @mcp.custom_route("/health", methods=["GET"])
 async def health_check(request):
     from starlette.responses import JSONResponse
+
     from . import __version__
 
     checks = {}
@@ -244,6 +267,7 @@ def main():
     import uvicorn
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
     from starlette.responses import JSONResponse, Response
+
     from . import __version__
 
     # Extract low-level Server from FastMCP (preserves all @mcp.tool registrations)
