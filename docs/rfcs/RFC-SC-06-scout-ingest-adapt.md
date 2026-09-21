@@ -73,30 +73,30 @@ def skill_scout_ingest(
     skills_dir: str,
 ) -> dict:
     """Fetch external skill, compare with local, propose evolution."""
-    
+
     # 1. Fetch repo content (README + skill files)
     content = _fetch_repo_content(source_url)
-    
+
     # 2. Find closest local skill (or use target_skill)
     if not target_skill:
         target_skill = _find_closest_local(content["description"], db, encoder)
-    
+
     # 3. Load local skill content
     local_content = _read_local_skill(target_skill, skills_dir)
-    
+
     # 4. Compare and identify gaps
     gaps = _compare_skills(local_content, content)
-    
+
     # 5. Generate adapted proposal
     proposal = _generate_proposal(gaps, local_content, content)
-    
+
     return {
         "target_skill": target_skill,
         "source": source_url,
         "gaps_found": len(gaps),
         "sections_to_add": gaps,
         "adapted_content": proposal,
-        "apply_with": f"skill_evolve(name='{target_skill}', correction=<adapted_content>, dry_run=False)"
+        "apply_with": f"skill_evolve(name='{target_skill}', correction=<adapted_content>, dry_run=False)",
     }
 ```
 
