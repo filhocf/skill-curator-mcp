@@ -36,10 +36,18 @@ After using a skill, record the result:
 
 ```python
 # Skill was helpful and correct
-skill_feedback(name="rer-k8s-deploy", outcome="success", task_description="deployed core to dev-rer namespace")
+skill_feedback(
+    name="rer-k8s-deploy",
+    outcome="success",
+    task_description="deployed core to dev-rer namespace",
+)
 
 # Skill existed but was incomplete/wrong
-skill_feedback(name="rer-k8s-deploy", outcome="failure", task_description="missing step for cert-manager setup")
+skill_feedback(
+    name="rer-k8s-deploy",
+    outcome="failure",
+    task_description="missing step for cert-manager setup",
+)
 ```
 
 **Outcomes**: `success`, `partial`, `failure`
@@ -79,13 +87,22 @@ When a skill is wrong or incomplete AND you know the fix:
 
 ```python
 # Preview the change (dry_run=True is default)
-skill_evolve(name="rer-k8s-deploy", correction="Add cert-manager step before ingress creation",
-             task_description="deploy failed because cert wasn't ready", section="Steps")
+skill_evolve(
+    name="rer-k8s-deploy",
+    correction="Add cert-manager step before ingress creation",
+    task_description="deploy failed because cert wasn't ready",
+    section="Steps",
+)
 # Returns: {"dry_run": True, "diff_summary": "+2/-0 lines. Section: Steps...", "preview_lines": [...]}
 
 # Apply the correction
-skill_evolve(name="rer-k8s-deploy", correction="Add cert-manager step before ingress creation",
-             task_description="deploy failed because cert wasn't ready", section="Steps", dry_run=False)
+skill_evolve(
+    name="rer-k8s-deploy",
+    correction="Add cert-manager step before ingress creation",
+    task_description="deploy failed because cert wasn't ready",
+    section="Steps",
+    dry_run=False,
+)
 # Returns: {"applied": True, "diff_summary": "...", "version_path": "~/.kiro/skills/.versions/rer-k8s-deploy.2026-07-03T15-30-00.md", "effectiveness_reset": True}
 ```
 
