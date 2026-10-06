@@ -70,10 +70,7 @@ EARS: Clustering SHALL be deterministic (same input = same output) given fixed e
 
 ```python
 @mcp.tool()
-async def skill_gaps(
-    correlate: bool = False,
-    session_id: str | None = None
-) -> dict:
+async def skill_gaps(correlate: bool = False, session_id: str | None = None) -> dict:
     """Detect skill gaps — enhanced with correlation."""
 
     result = {"known_gaps": [...]}  # current behavior
@@ -89,16 +86,18 @@ async def skill_gaps(
         patterns = []
         for cluster in clusters:
             if len(cluster) >= 3:
-                patterns.append({
-                    "theme": summarize_cluster(cluster),
-                    "occurrences": len(cluster),
-                    "first_seen": cluster[0].timestamp,
-                    "last_seen": cluster[-1].timestamp,
-                    "sample_tasks": [e.task_description for e in cluster[:3]],
-                    "closest_existing_skill": cluster[0].best_match_name,
-                    "recommended_action": determine_action(cluster),
-                    "actionable": True
-                })
+                patterns.append(
+                    {
+                        "theme": summarize_cluster(cluster),
+                        "occurrences": len(cluster),
+                        "first_seen": cluster[0].timestamp,
+                        "last_seen": cluster[-1].timestamp,
+                        "sample_tasks": [e.task_description for e in cluster[:3]],
+                        "closest_existing_skill": cluster[0].best_match_name,
+                        "recommended_action": determine_action(cluster),
+                        "actionable": True,
+                    }
+                )
 
         result["detected_patterns"] = patterns
         result["recommendations"] = generate_recommendations(patterns)

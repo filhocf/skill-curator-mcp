@@ -81,12 +81,17 @@ EARS: Cache SHALL be stored in the SQLite database (table `scout_cache`).
 
 ```python
 SOURCES = [
-    GitHubSource(search_type="repos", topics=["agent-skills", "claude-code", "kiro-skills", "mcp-skills"]),
-    AwesomeListSource(repos=[
-        "anthropics/anthropic-cookbook",
-        "kirodotdev/awesome-kiro",
-        "punkpeye/awesome-mcp-servers",
-    ]),
+    GitHubSource(
+        search_type="repos",
+        topics=["agent-skills", "claude-code", "kiro-skills", "mcp-skills"],
+    ),
+    AwesomeListSource(
+        repos=[
+            "anthropics/anthropic-cookbook",
+            "kirodotdev/awesome-kiro",
+            "punkpeye/awesome-mcp-servers",
+        ]
+    ),
     PyPISource(keywords=["mcp", "agent-skill", "claude-skill"]),
     WebSearchSource(engine="duckduckgo"),  # fallback, no API key needed
 ]

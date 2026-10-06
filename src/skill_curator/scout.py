@@ -119,7 +119,7 @@ def scout_skills(
                 query_results.extend(results)
             except Exception as e:
                 request_count += 1
-                warnings.append(f"Source '{source_name}' failed: {str(e)}")
+                warnings.append(f"Source '{source_name}' failed: {e!s}")
 
         all_skills.extend(query_results)
 
