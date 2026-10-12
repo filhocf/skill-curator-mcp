@@ -12,6 +12,8 @@ from skill_curator.indexer import reindex_all
 from skill_curator.models import FeedbackEntry, LifecycleState
 from skill_curator.scoring import (
     composite_score,
+)
+from skill_curator.scoring import (
     cosine_similarity as _cosine_similarity,
 )
 
@@ -339,7 +341,7 @@ def skill_auto_maintain(*, db: Database) -> dict:
 
 
 def get_onboarding_guide(
-    verbosity: str = "full", *, db: "Database | None" = None
+    verbosity: str = "full", *, db: Database | None = None
 ) -> dict:
     """Get integration guide for using the skill-curator MCP.
 
@@ -476,9 +478,10 @@ def get_onboarding_guide(
 
 def skill_audit(*, skills_dir: str | None = None) -> list[dict]:
     """Audit all skills for quality issues."""
-    from skill_curator.audit import audit_all
     import dataclasses
     import os
+
+    from skill_curator.audit import audit_all
 
     if skills_dir is None:
         skills_dir = os.environ.get(
@@ -495,7 +498,7 @@ def skill_evolve(
     task_description: str = "",
     section: str | None = None,
     dry_run: bool = True,
-    db: "Database",
+    db: Database,
     skills_dir: str,
     encoder: Any = None,
 ) -> dict:
@@ -574,7 +577,7 @@ def skill_rollback(
     name: str,
     *,
     version: str | None = None,
-    db: "Database",
+    db: Database,
     skills_dir: str,
     encoder: Any = None,
 ) -> dict:
@@ -582,9 +585,9 @@ def skill_rollback(
 
     If version is None, restores the latest version.
     """
-    from skill_curator.evolution import get_latest_version
-
     import os
+
+    from skill_curator.evolution import get_latest_version
 
     if skills_dir is None:
         skills_dir = os.environ.get(
