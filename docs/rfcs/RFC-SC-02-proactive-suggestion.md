@@ -71,22 +71,29 @@ EARS: The `gap_log` table SHALL store: timestamp, task_description, best_match_n
 {"name": "personal-branding", "score": 0.72, "description": "..."}
 
 # Depois (0.5 <= score < 0.7):
-{"name": "personal-branding", "score": 0.56, "description": "...",
- "suggestion": {
-   "gap_detected": false,
-   "improvement_opportunity": true,
-   "closest_match": {"name": "personal-branding", "score": 0.56},
-   "suggested_action": "evolve_existing"
- }}
+{
+    "name": "personal-branding",
+    "score": 0.56,
+    "description": "...",
+    "suggestion": {
+        "gap_detected": false,
+        "improvement_opportunity": true,
+        "closest_match": {"name": "personal-branding", "score": 0.56},
+        "suggested_action": "evolve_existing",
+    },
+}
 
 # Depois (score < 0.5):
-{"name": null, "score": 0.0,
- "suggestion": {
-   "gap_detected": true,
-   "closest_match": {"name": "personal-branding", "score": 0.43},
-   "suggested_action": "create_new",
-   "suggested_name": "linkedin-social-media-publishing"
- }}
+{
+    "name": null,
+    "score": 0.0,
+    "suggestion": {
+        "gap_detected": true,
+        "closest_match": {"name": "personal-branding", "score": 0.43},
+        "suggested_action": "create_new",
+        "suggested_name": "linkedin-social-media-publishing",
+    },
+}
 ```
 
 ### Nova tabela `gap_log`

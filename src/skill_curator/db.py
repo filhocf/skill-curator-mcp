@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import datetime, timedelta
-from typing import Optional
 
 import sqlite_vec
 
@@ -134,7 +133,7 @@ class Database:
         )
         self.conn.commit()
 
-    def get_skill(self, name: str) -> Optional[Skill]:
+    def get_skill(self, name: str) -> Skill | None:
         """Get a skill by name."""
         cur = self.conn.execute("SELECT * FROM skills WHERE name = ?", (name,))
         row = cur.fetchone()
@@ -142,7 +141,7 @@ class Database:
             return None
         return self._row_to_skill(row)
 
-    def list_skills(self, state: Optional[LifecycleState] = None) -> list[Skill]:
+    def list_skills(self, state: LifecycleState | None = None) -> list[Skill]:
         """List skills, optionally filtered by state."""
         if state:
             cur = self.conn.execute(

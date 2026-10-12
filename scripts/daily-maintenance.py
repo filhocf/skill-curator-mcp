@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Daily maintenance script for skill-curator."""
 
-from pathlib import Path
-from skill_curator.db import Database
-from skill_curator.maintenance import run_maintenance
 import json
 import os
+from pathlib import Path
+
+from skill_curator.db import Database
+from skill_curator.maintenance import run_maintenance
 
 db_dir = Path(
     os.environ.get(
