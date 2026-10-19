@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from skill_curator.db import Database
 from skill_curator.models import LifecycleState, Skill
@@ -18,7 +18,7 @@ def auto_stale(db: Database, days: int = 30) -> list[str]:
     Returns:
         List of skill names that were transitioned to STALE.
     """
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
     skills = db.list_skills(state=LifecycleState.ACTIVE)
     staled: list[str] = []
     for s in skills:
@@ -41,7 +41,7 @@ def auto_archive(
     Returns:
         List of skill names that were transitioned to ARCHIVED.
     """
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=stale_days)).isoformat()
+    cutoff = (datetime.now(UTC) - timedelta(days=stale_days)).isoformat()
     skills = db.list_skills(state=LifecycleState.STALE)
     archived: list[str] = []
     for s in skills:
@@ -99,7 +99,7 @@ def generate_draft_skill(gap_name: str, gap_count: int, db: Database) -> dict | 
         trigger_text=trigger,
         state=LifecycleState.DRAFT,
         gap_count=gap_count,
-        created_at=datetime.now(timezone.utc).isoformat(),
+        created_at=datetime.now(UTC).isoformat(),
     )
     db.upsert_skill(skill)
 
